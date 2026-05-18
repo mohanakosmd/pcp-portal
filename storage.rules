@@ -1,0 +1,29 @@
+rules_version = '2';
+
+// Firebase Storage security rules for the PCP Portal.
+//
+// Deploy via the Firebase Console (Storage → Rules → paste → Publish) or with
+// the Firebase CLI: `firebase deploy --only storage`.
+//
+// The portal's API routes talk to Storage over the REST API with the public
+// client config (no service-account auth), so for the demo we allow
+// unauthenticated read/write under the `pcp_cases/` prefix only. Everything
+// else stays denied by default.
+//
+// Before production: replace `if true` with real auth checks (e.g. require a
+// signed-in user and match the case's ownerUserId), or move uploads behind a
+// service-account-authenticated server.
+
+service firebase.storage {
+  match /b/{bucket}/o {
+    // Case documents + insurance card images.
+    match /pcp_cases/{allPaths=**} {
+      allow read, write: if true;
+    }
+
+    // Deny everything else.
+    match /{allPaths=**} {
+      allow read, write: if false;
+    }
+  }
+}

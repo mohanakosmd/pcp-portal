@@ -1,0 +1,25 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 800 480" role="img" aria-label="Dummy insurance card back">
+  <rect width="800" height="480" rx="26" fill="#0f172a"/>
+  <rect x="28" y="28" width="744" height="424" rx="18" fill="#f8fafc" stroke="#1d4ed8" stroke-width="3"/>
+
+  <text x="56" y="86" font-family="Inter, Arial, sans-serif" font-size="30" font-weight="700" fill="#1e3a8a">Important Information (Demo)</text>
+
+  <rect x="56" y="108" width="688" height="2" fill="#e2e8f0"/>
+
+  <text x="56" y="154" font-family="Inter, Arial, sans-serif" font-size="15" fill="#64748b">CLAIMS MAILING ADDRESS</text>
+  <text x="56" y="182" font-family="Inter, Arial, sans-serif" font-size="20" fill="#0f172a">Regional Health PPO</text>
+  <text x="56" y="208" font-family="Inter, Arial, sans-serif" font-size="20" fill="#0f172a">P.O. Box 12345, Seattle, WA 98101</text>
+
+  <text x="56" y="254" font-family="Inter, Arial, sans-serif" font-size="15" fill="#64748b">PREAUTH / PROVIDER HELP</text>
+  <text x="56" y="282" font-family="Inter, Arial, sans-serif" font-size="20" fill="#0f172a">(866) 555-0144</text>
+
+  <text x="430" y="154" font-family="Inter, Arial, sans-serif" font-size="15" fill="#64748b">PHARMACY HELP DESK</text>
+  <text x="430" y="182" font-family="Inter, Arial, sans-serif" font-size="20" fill="#0f172a">(877) 555-0172</text>
+
+  <text x="430" y="254" font-family="Inter, Arial, sans-serif" font-size="15" fill="#64748b">NURSE LINE (24/7)</text>
+  <text x="430" y="282" font-family="Inter, Arial, sans-serif" font-size="20" fill="#0f172a">(888) 555-0117</text>
+
+  <rect x="56" y="332" width="688" height="84" rx="12" fill="#e2e8f0" stroke="#cbd5e1"/>
+  <text x="74" y="365" font-family="Inter, Arial, sans-serif" font-size="16" fill="#1e293b">This is a demo card for UI preview only.</text>
+  <text x="74" y="392" font-family="Inter, Arial, sans-serif" font-size="16" fill="#1e293b">In emergencies call 911 or go to nearest emergency room.</text>
+</svg>

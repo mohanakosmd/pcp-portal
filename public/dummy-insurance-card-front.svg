@@ -1,0 +1,32 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 800 480" role="img" aria-label="Dummy insurance card front">
+  <defs>
+    <linearGradient id="bg" x1="0" y1="0" x2="1" y2="1">
+      <stop offset="0%" stop-color="#1e3a8a"/>
+      <stop offset="100%" stop-color="#0f172a"/>
+    </linearGradient>
+  </defs>
+  <rect width="800" height="480" rx="26" fill="url(#bg)"/>
+  <rect x="28" y="28" width="744" height="424" rx="18" fill="#f8fafc" stroke="#1d4ed8" stroke-width="3"/>
+  <text x="56" y="86" font-family="Inter, Arial, sans-serif" font-size="34" font-weight="700" fill="#1e3a8a">Regional Health PPO</text>
+  <text x="56" y="118" font-family="Inter, Arial, sans-serif" font-size="17" fill="#334155">Member Insurance Card (Demo)</text>
+
+  <rect x="56" y="152" width="688" height="2" fill="#e2e8f0"/>
+
+  <text x="56" y="198" font-family="Inter, Arial, sans-serif" font-size="15" fill="#64748b">MEMBER NAME</text>
+  <text x="56" y="226" font-family="Inter, Arial, sans-serif" font-size="25" font-weight="700" fill="#0f172a">Jordan Ellis</text>
+
+  <text x="430" y="198" font-family="Inter, Arial, sans-serif" font-size="15" fill="#64748b">MEMBER ID</text>
+  <text x="430" y="226" font-family="Inter, Arial, sans-serif" font-size="25" font-weight="700" fill="#0f172a">BCBS-WA-4320917</text>
+
+  <text x="56" y="276" font-family="Inter, Arial, sans-serif" font-size="15" fill="#64748b">GROUP NO.</text>
+  <text x="56" y="302" font-family="Inter, Arial, sans-serif" font-size="22" font-weight="700" fill="#0f172a">GRP-98031</text>
+
+  <text x="300" y="276" font-family="Inter, Arial, sans-serif" font-size="15" fill="#64748b">PLAN</text>
+  <text x="300" y="302" font-family="Inter, Arial, sans-serif" font-size="22" font-weight="700" fill="#0f172a">PPO</text>
+
+  <text x="430" y="276" font-family="Inter, Arial, sans-serif" font-size="15" fill="#64748b">EFFECTIVE DATE</text>
+  <text x="430" y="302" font-family="Inter, Arial, sans-serif" font-size="22" font-weight="700" fill="#0f172a">01/01/2026</text>
+
+  <rect x="56" y="346" width="688" height="70" rx="12" fill="#e2e8f0" stroke="#cbd5e1"/>
+  <text x="74" y="388" font-family="Inter, Arial, sans-serif" font-size="18" fill="#1e293b">Customer Support: (800) 555-0199</text>
+</svg>
