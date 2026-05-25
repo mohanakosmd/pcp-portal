@@ -3,6 +3,8 @@ import { NextResponse } from "next/server";
 import { readSessionUserId } from "@/lib/auth";
 import { PCP_CASES_COLLECTION, readCaseOwnedBy } from "@/lib/cases";
 import { nowIso, upsertDocument } from "@/lib/firestore-rest";
+import { getGiUser } from "@/lib/gi-users";
+import { emitCaseShared } from "@/lib/notification-events";
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
@@ -16,13 +18,21 @@ export async function POST(
   if (!userId) return NextResponse.json({ error: "Not authenticated." }, { status: 401 });
 
   try {
-    const body = (await request.json().catch(() => ({}))) as { giUser?: unknown };
-    const giUser =
-      typeof body.giUser === "string" && body.giUser.trim() ? body.giUser.trim() : "";
-    if (!giUser) {
+    const body = (await request.json().catch(() => ({}))) as { giUserId?: unknown };
+    const giUserId =
+      typeof body.giUserId === "string" && body.giUserId.trim() ? body.giUserId.trim() : "";
+    if (!giUserId) {
       return NextResponse.json(
         { error: "A GI specialist must be selected." },
         { status: 400 }
+      );
+    }
+
+    const giUser = await getGiUser(giUserId);
+    if (!giUser) {
+      return NextResponse.json(
+        { error: "Selected GI specialist is not available." },
+        { status: 404 }
       );
     }
 
@@ -37,16 +47,25 @@ export async function POST(
     const now = nowIso();
     await upsertDocument(PCP_CASES_COLLECTION, caseId, {
       status: "under_review",
-      sharedWithGiUser: giUser,
+      sharedWithGiUserId: giUser.id,
+      sharedWithGiUser: giUser.displayName,
       sharedWithGiAt: now,
       statusUpdatedAt: now,
       updatedAt: now,
     });
 
+    void emitCaseShared({
+      caseId,
+      caseShortCode: root.shortCode,
+      ownerUserId: userId,
+      giUserId: giUser.id,
+    }).catch((err) => console.error("[cases share] emitCaseShared failed:", err));
+
     return NextResponse.json({
       ok: true,
       status: "under_review",
-      sharedWithGiUser: giUser,
+      sharedWithGiUserId: giUser.id,
+      sharedWithGiUser: giUser.displayName,
       sharedWithGiAt: now,
     });
   } catch (err) {

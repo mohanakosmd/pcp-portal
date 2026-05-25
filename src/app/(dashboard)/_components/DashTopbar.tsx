@@ -1,3 +1,5 @@
+import { NotificationBell } from "./NotificationBell";
+
 function computeInitials(name: string, fallbackFromEmail: string): string {
   const cleaned = name.trim().replace(/\s+/g, " ");
   if (cleaned) {
@@ -49,21 +51,7 @@ export function DashTopbar({ name = "", email = "" }: { name?: string; email?: s
       </div>
 
       <div className="dash-topbar__tools">
-        <button type="button" className="dash-icon-btn" aria-label="Notifications">
-          <svg width="20" height="20" viewBox="0 0 24 24" fill="none" aria-hidden="true">
-            <path
-              d="M6 10C6 7.79 7.79 6 10 6H14C16.21 6 18 7.79 18 10V15L20 17H4L6 15V10Z"
-              stroke="currentColor"
-              strokeWidth="1.8"
-              strokeLinejoin="round"
-            />
-            <path
-              d="M10 20C10 21.1 10.9 22 12 22C13.1 22 14 21.1 14 20"
-              stroke="currentColor"
-              strokeWidth="1.8"
-            />
-          </svg>
-        </button>
+        <NotificationBell />
         <span className="dash-topbar__divider" aria-hidden="true" />
         <div className="dash-user">
           <div className="dash-user__meta">

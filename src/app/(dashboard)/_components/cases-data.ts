@@ -104,11 +104,3 @@ export const CASES: CaseRecord[] = [
   },
 ];
 
-export const GI_USERS = [
-  "Dr. Ayaan Gupta",
-  "Dr. Nisha Verma",
-  "Dr. Rohan Malik",
-  "Dr. Priya Nair",
-  "Dr. Karan Iyer",
-  "Dr. Meera Singh",
-];

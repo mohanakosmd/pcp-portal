@@ -2,7 +2,15 @@ import { randomInt, createHmac, randomBytes, timingSafeEqual } from "crypto";
 
 import { cookies } from "next/headers";
 
-export const SESSION_COOKIE = "pcp_session";
+// IMPORTANT: must be "__session". When the app is served through Firebase
+// Hosting (pcp-portal.web.app rewrites to the App Hosting/Cloud Run backend),
+// Hosting strips every cookie EXCEPT one named "__session" from cacheable (GET)
+// requests so it can CDN-cache them. The session is read during GET page renders
+// (dashboard layout/pages) and GET API routes, so any other name is dropped on
+// pcp-portal.web.app and every protected page bounces to /login. Do not rename.
+// (LOGIN_PENDING is only read in POST handlers, which are not cacheable and keep
+// their cookies, so it doesn't need the __session name.)
+export const SESSION_COOKIE = "__session";
 export const LOGIN_PENDING_COOKIE = "pcp_login_pending";
 const SESSION_MAX_AGE_SECONDS = 60 * 60 * 24 * 7;
 const LOGIN_PENDING_MAX_AGE_SECONDS = 60 * 5;

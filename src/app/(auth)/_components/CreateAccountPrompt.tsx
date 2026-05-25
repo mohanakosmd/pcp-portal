@@ -1,9 +1,8 @@
 "use client";
 
-import { useRouter } from "next/navigation";
 import { useCallback, useEffect, useRef, useState } from "react";
 
-type Step = "request" | "otp" | "password";
+type Step = "request" | "otp" | "pending";
 
 const OTP_LENGTH = 6;
 const INITIAL_SECONDS = 60;
@@ -14,13 +13,12 @@ type ToastState = {
 };
 
 export function CreateAccountPrompt() {
-  const router = useRouter();
   const [open, setOpen] = useState(false);
   const [step, setStep] = useState<Step>("request");
 
-  const [name, setName] = useState("Jhon Travis");
-  const [email, setEmail] = useState("jhon_travis@outlook.com");
-  const [mobile, setMobile] = useState("+1 (555) 214-8890");
+  const [name, setName] = useState("");
+  const [email, setEmail] = useState("");
+  const [mobile, setMobile] = useState("");
 
   const [userId, setUserId] = useState<string>("");
   const [requestError, setRequestError] = useState("");
@@ -32,12 +30,6 @@ export function CreateAccountPrompt() {
   const [secondsLeft, setSecondsLeft] = useState(INITIAL_SECONDS);
   const [otpError, setOtpError] = useState("");
   const otpInputsRef = useRef<Array<HTMLInputElement | null>>([]);
-
-  const [newPassword, setNewPassword] = useState("");
-  const [confirmPassword, setConfirmPassword] = useState("");
-  const [showNewPassword, setShowNewPassword] = useState(false);
-  const [showConfirmPassword, setShowConfirmPassword] = useState(false);
-  const [passwordError, setPasswordError] = useState("");
 
   const [toast, setToast] = useState<ToastState>({ message: "", state: "hidden" });
   const toastHideTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
@@ -89,9 +81,6 @@ export function CreateAccountPrompt() {
     event?.preventDefault();
     setStep("request");
     setOtpDigits(Array.from({ length: OTP_LENGTH }, () => ""));
-    setNewPassword("");
-    setConfirmPassword("");
-    setPasswordError("");
     setRequestError("");
     setOtpError("");
     setUserId("");
@@ -201,7 +190,7 @@ export function CreateAccountPrompt() {
         setOtpError(typeof data.error === "string" ? data.error : "Verification failed.");
         return;
       }
-      setStep("password");
+      setStep("pending");
     } catch {
       setOtpError("Network error. Please try again.");
     } finally {
@@ -230,36 +219,10 @@ export function CreateAccountPrompt() {
     }
   };
 
-  const handlePasswordSubmit = async (event: React.FormEvent<HTMLFormElement>) => {
-    event.preventDefault();
-    if (newPassword && newPassword !== confirmPassword) {
-      setPasswordError("Passwords do not match.");
-      return;
-    }
-    setSubmitting(true);
-    setPasswordError("");
-    try {
-      const { ok, data } = await callJson("/api/auth/set-password", {
-        password: newPassword,
-      });
-      if (!ok) {
-        setPasswordError(
-          typeof data.error === "string" ? data.error : "Could not save password."
-        );
-        return;
-      }
-      closeModal();
-      router.push("/dashboard");
-    } catch {
-      setPasswordError("Network error. Please try again.");
-    } finally {
-      setSubmitting(false);
-    }
-  };
-
   const timerText = secondsLeft > 0 ? `${secondsLeft} Sec Remaining` : "OTP expired";
 
-  const modalTitle = step === "password" ? "Set new password" : "Create New Account";
+  const modalTitle =
+    step === "pending" ? "Registration submitted" : "Create New Account";
 
   const toastClassName = [
     "otp-toast",
@@ -283,14 +246,12 @@ export function CreateAccountPrompt() {
         className={`access-backdrop${open ? "" : " access-backdrop--hidden"}`}
         role="presentation"
         aria-hidden={!open}
-        onClick={closeModal}
       >
         <div
           className="access-modal"
           role="dialog"
           aria-modal="true"
           aria-labelledby="access-modal-title"
-          onClick={(event) => event.stopPropagation()}
         >
           <div className="access-modal__header">
             <h2 className="access-modal__title" id="access-modal-title">
@@ -455,80 +416,33 @@ export function CreateAccountPrompt() {
           </div>
 
           <div
-            className={`access-step${step === "password" ? " access-step--active" : " access-step--hidden"}`}
-            aria-hidden={step !== "password"}
+            className={`access-step${step === "pending" ? " access-step--active" : " access-step--hidden"}`}
+            aria-hidden={step !== "pending"}
           >
-            <form className="access-form" noValidate onSubmit={handlePasswordSubmit}>
-              <h3 className="section-title section-title--left">Set new password</h3>
+            <div className="access-form access-pending">
+              <div className="access-pending__icon" aria-hidden="true">
+                <svg width="48" height="48" viewBox="0 0 24 24" fill="none">
+                  <circle cx="12" cy="12" r="9" stroke="#16a34a" strokeWidth="1.8" />
+                  <path
+                    d="M8 12l2.5 2.5L16 9"
+                    stroke="#16a34a"
+                    strokeWidth="1.8"
+                    strokeLinecap="round"
+                    strokeLinejoin="round"
+                  />
+                </svg>
+              </div>
+              <h3 className="section-title section-title--left">Registration submitted</h3>
               <p className="section-hint section-hint--left">
-                Demo only — set a password for your account (optional).
+                Thanks, {name || "there"}! Your email is verified and your registration for{" "}
+                <span className="otp-email">{email || "your email"}</span> is now pending admin
+                approval. You&apos;ll be able to log in once an administrator approves your
+                account.
               </p>
-              <div>
-                <label className="field-label" htmlFor="access-new-password">
-                  New password
-                </label>
-                <div className="input-modern input-modern--no-icon input-modern--with-toggle">
-                  <input
-                    id="access-new-password"
-                    name="new-password"
-                    type={showNewPassword ? "text" : "password"}
-                    autoComplete="new-password"
-                    placeholder="Enter a password"
-                    value={newPassword}
-                    onChange={(event) => {
-                      setNewPassword(event.target.value);
-                      setPasswordError("");
-                    }}
-                  />
-                  <PasswordToggle
-                    visible={showNewPassword}
-                    onToggle={() => setShowNewPassword((v) => !v)}
-                  />
-                </div>
-              </div>
-              <div>
-                <label className="field-label" htmlFor="access-confirm-password">
-                  Confirm new password
-                </label>
-                <div className="input-modern input-modern--no-icon input-modern--with-toggle">
-                  <input
-                    id="access-confirm-password"
-                    name="confirm-password"
-                    type={showConfirmPassword ? "text" : "password"}
-                    autoComplete="new-password"
-                    placeholder="Confirm password"
-                    value={confirmPassword}
-                    onChange={(event) => {
-                      setConfirmPassword(event.target.value);
-                      setPasswordError("");
-                    }}
-                  />
-                  <PasswordToggle
-                    visible={showConfirmPassword}
-                    onToggle={() => setShowConfirmPassword((v) => !v)}
-                  />
-                </div>
-              </div>
-              {passwordError ? (
-                <p
-                  className="section-hint section-hint--left"
-                  style={{ color: "#b91c1c", margin: 0 }}
-                >
-                  {passwordError}
-                </p>
-              ) : null}
-              <button className="btn-primary" type="submit" disabled={submitting}>
-                {submitting ? "Saving…" : "Continue to login"}
+              <button className="btn-primary" type="button" onClick={closeModal}>
+                Done
               </button>
-              <button
-                type="button"
-                className="access-otp-back access-otp-back--bottom"
-                aria-label="Back to OTP verification"
-                onClick={() => setStep("otp")}
-              >
-                <span>Back</span>
-              </button>
-            </form>
+            </div>
           </div>
         </div>
       </div>
@@ -543,54 +457,5 @@ export function CreateAccountPrompt() {
         <p className="otp-toast__text">{toast.message}</p>
       </div>
     </>
-  );
-}
-
-function PasswordToggle({
-  visible,
-  onToggle,
-}: {
-  visible: boolean;
-  onToggle: () => void;
-}) {
-  return (
-    <button
-      type="button"
-      className="password-toggle"
-      aria-label={visible ? "Hide password" : "Show password"}
-      aria-pressed={visible}
-      onClick={onToggle}
-    >
-      {visible ? (
-        <svg width="18" height="18" viewBox="0 0 24 24" fill="none" aria-hidden="true">
-          <path d="M3 3L21 21" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" />
-          <path
-            d="M10.58 10.58C10.21 10.95 10 11.46 10 12C10 13.1 10.9 14 12 14C12.54 14 13.05 13.79 13.42 13.42"
-            stroke="currentColor"
-            strokeWidth="1.8"
-            strokeLinecap="round"
-            strokeLinejoin="round"
-          />
-          <path
-            d="M9.88 5.09C10.56 4.86 11.27 4.75 12 4.75C16.5 4.75 20.27 8.24 21.25 12C20.86 13.49 20.02 14.83 18.85 15.84M14.12 18.91C13.44 19.14 12.73 19.25 12 19.25C7.5 19.25 3.73 15.76 2.75 12C3.23 10.17 4.39 8.58 5.97 7.47"
-            stroke="currentColor"
-            strokeWidth="1.8"
-            strokeLinecap="round"
-            strokeLinejoin="round"
-          />
-        </svg>
-      ) : (
-        <svg width="18" height="18" viewBox="0 0 24 24" fill="none" aria-hidden="true">
-          <path
-            d="M2.75 12C3.73 8.24 7.5 4.75 12 4.75C16.5 4.75 20.27 8.24 21.25 12C20.27 15.76 16.5 19.25 12 19.25C7.5 19.25 3.73 15.76 2.75 12Z"
-            stroke="currentColor"
-            strokeWidth="1.8"
-            strokeLinecap="round"
-            strokeLinejoin="round"
-          />
-          <circle cx="12" cy="12" r="3" stroke="currentColor" strokeWidth="1.8" />
-        </svg>
-      )}
-    </button>
   );
 }

@@ -511,6 +511,27 @@
   cursor: not-allowed;
 }
 
+/* Active "listening" state — red mic with a pulsing ring. */
+.cc-speech-btn--listening,
+.cc-speech-btn--listening:hover {
+  background: #fee2e2;
+  border-color: #fca5a5;
+  color: #b91c1c;
+  animation: cc-speech-pulse 1.4s ease-out infinite;
+}
+
+@keyframes cc-speech-pulse {
+  0%   { box-shadow: 0 0 0 0 rgba(220, 38, 38, 0.45); }
+  70%  { box-shadow: 0 0 0 12px rgba(220, 38, 38, 0); }
+  100% { box-shadow: 0 0 0 0 rgba(220, 38, 38, 0); }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .cc-speech-btn--listening {
+    animation: none;
+  }
+}
+
 .cc-search-wrap--medical .cc-input {
   background: #f8fafc;
 }

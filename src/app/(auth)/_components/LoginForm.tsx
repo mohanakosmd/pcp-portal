@@ -5,8 +5,8 @@ import { useState } from "react";
 
 export function LoginForm() {
   const router = useRouter();
-  const [email, setEmail] = useState("jhon_travis@outlook.com");
-  const [password, setPassword] = useState("12345678");
+  const [email, setEmail] = useState("");
+  const [password, setPassword] = useState("");
   const [showPassword, setShowPassword] = useState(false);
   const [submitting, setSubmitting] = useState(false);
   const [error, setError] = useState("");
@@ -60,6 +60,7 @@ export function LoginForm() {
             type="email"
             value={email}
             onChange={(e) => setEmail(e.target.value)}
+            placeholder="jhon_travis@outlook.com"
             autoComplete="email"
           />
         </div>
@@ -83,6 +84,7 @@ export function LoginForm() {
             type={showPassword ? "text" : "password"}
             value={password}
             onChange={(e) => setPassword(e.target.value)}
+            placeholder="Enter your password"
             autoComplete="current-password"
           />
           <button

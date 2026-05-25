@@ -2,25 +2,75 @@
 
 import { useEffect, useMemo, useState } from "react";
 
-import {
-  REPORTS,
-  getSymptomProfile,
-  type ReportRow,
-  type SymptomProfile,
-} from "./reports-data";
+import type { GiMedicalFile, GiSharedReport } from "@/lib/gi-reports";
+
+type ReportComment = {
+  id: string;
+  authorName: string;
+  authorRole: string;
+  body: string;
+  createdAt: string;
+};
 
 const ROWS_PER_PAGE = 5;
 
-export function ReportsView() {
-  const [page, setPage] = useState(1);
-  const [activeReport, setActiveReport] = useState<ReportRow | null>(null);
-  const [remark, setRemark] = useState("");
+function formatDate(iso: string | null | undefined): string {
+  if (!iso) return "—";
+  const d = new Date(iso);
+  if (Number.isNaN(d.getTime())) return "—";
+  return d.toLocaleDateString(undefined, {
+    month: "long",
+    day: "numeric",
+    year: "numeric",
+  });
+}
 
-  const totalPages = Math.max(1, Math.ceil(REPORTS.length / ROWS_PER_PAGE));
+function formatDateTime(iso: string | null | undefined): string {
+  if (!iso) return "—";
+  const d = new Date(iso);
+  if (Number.isNaN(d.getTime())) return "—";
+  return `${d.toLocaleDateString(undefined, {
+    month: "short",
+    day: "numeric",
+    year: "numeric",
+  })} · ${d.toLocaleTimeString(undefined, { hour: "numeric", minute: "2-digit" })}`;
+}
+
+function formatBytes(n: number): string {
+  if (!n) return "—";
+  if (n < 1024) return `${n} B`;
+  if (n < 1024 * 1024) return `${(n / 1024).toFixed(1)} KB`;
+  return `${(n / (1024 * 1024)).toFixed(1)} MB`;
+}
+
+function splitSymptoms(s: string): string[] {
+  if (!s) return [];
+  return s
+    .split(/[,\n;]+/)
+    .map((t) => t.trim())
+    .filter(Boolean)
+    .slice(0, 8);
+}
+
+export function ReportsView({ reports }: { reports: GiSharedReport[] }) {
+  const [page, setPage] = useState(1);
+  const [activeReport, setActiveReport] = useState<GiSharedReport | null>(null);
+  const [remark, setRemark] = useState("");
+  const [comments, setComments] = useState<ReportComment[]>([]);
+  const [commentsLoading, setCommentsLoading] = useState(false);
+  const [commentSubmitting, setCommentSubmitting] = useState(false);
+  const [commentError, setCommentError] = useState("");
+
+  const totalPages = Math.max(1, Math.ceil(reports.length / ROWS_PER_PAGE));
   const visibleRows = useMemo(() => {
     const start = (page - 1) * ROWS_PER_PAGE;
-    return REPORTS.slice(start, start + ROWS_PER_PAGE);
-  }, [page]);
+    return reports.slice(start, start + ROWS_PER_PAGE);
+  }, [page, reports]);
+
+  const lastReviewed = useMemo(() => {
+    if (!reports.length) return null;
+    return reports[0].sharedAt;
+  }, [reports]);
 
   useEffect(() => {
     if (!activeReport) return;
@@ -40,30 +90,90 @@ export function ReportsView() {
     return () => document.removeEventListener("keydown", onKey);
   }, [activeReport]);
 
-  const openReport = (row: ReportRow) => {
+  // Load remarks for the open report.
+  useEffect(() => {
+    if (!activeReport) {
+      setComments([]);
+      return;
+    }
+    let cancelled = false;
+    setCommentsLoading(true);
+    setCommentError("");
+    fetch(`/api/reports/${encodeURIComponent(activeReport.id)}/comments`)
+      .then(async (r) => {
+        const data = (await r.json().catch(() => ({}))) as {
+          comments?: ReportComment[];
+          error?: string;
+        };
+        if (!r.ok) throw new Error(data.error || `Failed (${r.status})`);
+        return Array.isArray(data.comments) ? data.comments : [];
+      })
+      .then((list) => {
+        if (!cancelled) setComments(list);
+      })
+      .catch(() => {
+        if (!cancelled) setComments([]);
+      })
+      .finally(() => {
+        if (!cancelled) setCommentsLoading(false);
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [activeReport]);
+
+  const openReport = (row: GiSharedReport) => {
     setRemark("");
+    setCommentError("");
     setActiveReport(row);
   };
 
   const closeReport = () => setActiveReport(null);
 
-  const handleDownload = (row: ReportRow) => {
-    window.alert(`${row.reportName} download started (demo).`);
-  };
-
-  const handleShare = (row: ReportRow) => {
-    window.alert(`${row.reportName} shared with GI (demo).`);
-  };
-
-  const submitRemark = (event: React.FormEvent<HTMLFormElement>) => {
-    event.preventDefault();
-    const text = remark.trim();
-    if (!text) {
-      window.alert("Please add a remark before submitting.");
+  const handleDownload = (row: GiSharedReport) => {
+    if (!row.medicalFiles.length) {
+      window.alert("No medical files attached to this report.");
       return;
     }
-    window.alert(`Remark submitted: ${text}`);
-    setRemark("");
+    // Open each file in a new tab — browser handles direct download for PDFs.
+    for (const f of row.medicalFiles) {
+      if (f.docUrl) window.open(f.docUrl, "_blank", "noopener");
+    }
+  };
+
+  const submitRemark = async (event: React.FormEvent<HTMLFormElement>) => {
+    event.preventDefault();
+    if (!activeReport) return;
+    const text = remark.trim();
+    if (!text) {
+      setCommentError("Please add a remark before submitting.");
+      return;
+    }
+    setCommentSubmitting(true);
+    setCommentError("");
+    try {
+      const r = await fetch(
+        `/api/reports/${encodeURIComponent(activeReport.id)}/comments`,
+        {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ body: text }),
+        }
+      );
+      const data = (await r.json().catch(() => ({}))) as {
+        comment?: ReportComment;
+        error?: string;
+      };
+      if (!r.ok) throw new Error(data.error || `Failed (${r.status})`);
+      if (data.comment) setComments((prev) => [...prev, data.comment!]);
+      setRemark("");
+    } catch (err) {
+      setCommentError(
+        err instanceof Error ? err.message : "Could not submit the remark."
+      );
+    } finally {
+      setCommentSubmitting(false);
+    }
   };
 
   return (
@@ -96,95 +206,110 @@ export function ReportsView() {
                   </span>
                   <div>
                     <h2>Final Case Report</h2>
-                    <p>Your medical summary for this request</p>
+                    <p>Reports shared back to your cases by GI specialists</p>
                   </div>
                 </div>
                 <div className="reports-paper__date">
                   Last reviewed
-                  <strong>March 14, 2026</strong>
+                  <strong>{formatDate(lastReviewed)}</strong>
                 </div>
               </header>
 
               <div className="reports-table-wrap">
-                <table className="reports-table" aria-label="Report metadata">
-                  <thead>
-                    <tr>
-                      <th>Report</th>
-                      <th>Patient</th>
-                      <th>Date of birth</th>
-                      <th>Case ID</th>
-                      <th>Status</th>
-                      <th>Actions</th>
-                    </tr>
-                  </thead>
-                  <tbody>
-                    {visibleRows.map((row) => (
-                      <tr key={row.caseId}>
-                        <td>{row.reportName}</td>
-                        <td>{row.patient}</td>
-                        <td>{row.dob}</td>
-                        <td>{row.caseId}</td>
-                        <td>
-                          <span className="reports-pill reports-pill--done">Finalized</span>
-                        </td>
-                        <td>
-                          <div className="reports-row-actions">
-                            <button
-                              type="button"
-                              className="reports-row-view"
-                              onClick={() => openReport(row)}
-                            >
-                              View report
-                            </button>
-                            <button
-                              type="button"
-                              className="reports-row-share"
-                              onClick={() => handleShare(row)}
-                            >
-                              Share with GI
-                            </button>
-                            <button
-                              type="button"
-                              className="reports-row-download"
-                              onClick={() => handleDownload(row)}
-                            >
-                              Download
-                            </button>
-                          </div>
-                        </td>
-                      </tr>
-                    ))}
-                  </tbody>
-                </table>
+                {reports.length === 0 ? (
+                  <p
+                    style={{
+                      padding: "32px 12px",
+                      textAlign: "center",
+                      color: "#64748b",
+                    }}
+                  >
+                    No GI reports have been shared with your cases yet.
+                  </p>
+                ) : (
+                  <>
+                    <table className="reports-table" aria-label="Report metadata">
+                      <thead>
+                        <tr>
+                          <th>Report</th>
+                          <th>Patient</th>
+                          <th>Date of birth</th>
+                          <th>Case ID</th>
+                          <th>Status</th>
+                          <th>Actions</th>
+                        </tr>
+                      </thead>
+                      <tbody>
+                        {visibleRows.map((row) => (
+                          <tr key={row.id}>
+                            <td>{row.reportName}</td>
+                            <td>{row.patientName}</td>
+                            <td>{row.dateOfBirth ?? "—"}</td>
+                            <td>#{row.caseShortCode}</td>
+                            <td>
+                              <span className="reports-pill reports-pill--done">
+                                {row.status}
+                              </span>
+                            </td>
+                            <td>
+                              <div className="reports-row-actions">
+                                <button
+                                  type="button"
+                                  className="reports-row-view"
+                                  onClick={() => openReport(row)}
+                                >
+                                  View report
+                                </button>
+                                <button
+                                  type="button"
+                                  className="reports-row-download"
+                                  onClick={() => handleDownload(row)}
+                                  disabled={row.medicalFiles.length === 0}
+                                  title={
+                                    row.medicalFiles.length
+                                      ? `Download ${row.medicalFiles.length} file(s)`
+                                      : "No files attached"
+                                  }
+                                >
+                                  Download
+                                </button>
+                              </div>
+                            </td>
+                          </tr>
+                        ))}
+                      </tbody>
+                    </table>
 
-                <div
-                  className="reports-pagination"
-                  style={{
-                    marginTop: 14,
-                    display: "flex",
-                    alignItems: "center",
-                    justifyContent: "flex-end",
-                    gap: 10,
-                  }}
-                >
-                  <button
-                    type="button"
-                    onClick={() => setPage((p) => Math.max(1, p - 1))}
-                    disabled={page === 1}
-                  >
-                    Previous
-                  </button>
-                  <span aria-live="polite">
-                    Page {page} of {totalPages}
-                  </span>
-                  <button
-                    type="button"
-                    onClick={() => setPage((p) => Math.min(totalPages, p + 1))}
-                    disabled={page === totalPages}
-                  >
-                    Next
-                  </button>
-                </div>
+                    <div
+                      className="reports-pagination"
+                      style={{
+                        marginTop: 14,
+                        display: "flex",
+                        alignItems: "center",
+                        justifyContent: "flex-end",
+                        gap: 10,
+                      }}
+                    >
+                      <button
+                        type="button"
+                        onClick={() => setPage((p) => Math.max(1, p - 1))}
+                        disabled={page === 1}
+                      >
+                        Previous
+                      </button>
+                      <span aria-live="polite">
+                        Page {page} of {totalPages}
+                      </span>
+                      <button
+                        type="button"
+                        onClick={() => setPage((p) => Math.min(totalPages, p + 1))}
+                        disabled={page === totalPages}
+                      >
+                        Next
+                      </button>
+                    </div>
+                  </>
+                )}
               </div>
 
               <p className="reports-note">
@@ -202,6 +327,10 @@ export function ReportsView() {
           onRemarkChange={setRemark}
           onSubmitRemark={submitRemark}
           onClose={closeReport}
+          comments={comments}
+          commentsLoading={commentsLoading}
+          commentSubmitting={commentSubmitting}
+          commentError={commentError}
         />
       ) : null}
     </main>
@@ -209,11 +338,15 @@ export function ReportsView() {
 }
 
 type ReportModalProps = {
-  row: ReportRow;
+  row: GiSharedReport;
   remark: string;
   onRemarkChange: (value: string) => void;
   onSubmitRemark: (event: React.FormEvent<HTMLFormElement>) => void;
   onClose: () => void;
+  comments: ReportComment[];
+  commentsLoading: boolean;
+  commentSubmitting: boolean;
+  commentError: string;
 };
 
 function ReportModal({
@@ -222,10 +355,11 @@ function ReportModal({
   onRemarkChange,
   onSubmitRemark,
   onClose,
+  comments,
+  commentsLoading,
+  commentSubmitting,
+  commentError,
 }: ReportModalProps) {
-  const profile = getSymptomProfile(row.caseId);
-  const isFinalReport = row.reportName === "Final Case Report";
-
   return (
     <div className="reports-modal">
       <div className="reports-modal__backdrop" onClick={onClose} />
@@ -255,17 +389,32 @@ function ReportModal({
         </header>
 
         <div className="reports-modal__body">
-          {isFinalReport ? (
-            <FinalReportBody row={row} profile={profile} />
-          ) : (
-            <GenericReportBody row={row} profile={profile} />
-          )}
+          <FinalReportBody row={row} />
         </div>
 
         <form className="reports-modal__remark" onSubmit={onSubmitRemark}>
           <label htmlFor="report-remark-input" className="reports-modal__remark-label">
             Remark
           </label>
+
+          {commentsLoading ? (
+            <p className="reports-remark-empty">Loading remarks…</p>
+          ) : comments.length > 0 ? (
+            <ul className="reports-remark-list">
+              {comments.map((c) => (
+                <li key={c.id} className="reports-remark-item">
+                  <div className="reports-remark-item__head">
+                    <strong>{c.authorName}</strong>
+                    <span>{formatDateTime(c.createdAt)}</span>
+                  </div>
+                  <p className="reports-remark-item__body">{c.body}</p>
+                </li>
+              ))}
+            </ul>
+          ) : (
+            <p className="reports-remark-empty">No remarks yet. Add the first one below.</p>
+          )}
+
           <textarea
             id="report-remark-input"
             className="reports-modal__remark-input"
@@ -274,10 +423,18 @@ function ReportModal({
             placeholder="Add your remark here..."
             value={remark}
             onChange={(e) => onRemarkChange(e.target.value)}
+            disabled={commentSubmitting}
           />
+          {commentError ? (
+            <p className="reports-remark-error">{commentError}</p>
+          ) : null}
           <div className="reports-modal__remark-actions">
-            <button type="submit" className="reports-row-share">
-              Submit
+            <button
+              type="submit"
+              className="reports-row-share"
+              disabled={commentSubmitting}
+            >
+              {commentSubmitting ? "Submitting…" : "Submit"}
             </button>
           </div>
         </form>
@@ -286,88 +443,104 @@ function ReportModal({
   );
 }
 
-function FinalReportBody({ row, profile }: { row: ReportRow; profile: SymptomProfile }) {
+function FinalReportBody({ row }: { row: GiSharedReport }) {
+  const symptomChips = splitSymptoms(row.presentingSymptoms);
   return (
     <article className="reports-modal-report">
       <section className="reports-modal-report__meta">
         <p>
           <span>Patient</span>
-          <strong>Jordan Ellis</strong>
+          <strong>{row.patientName}</strong>
         </p>
         <p>
           <span>Case ID</span>
-          <strong>{row.caseId}</strong>
+          <strong>#{row.caseShortCode}</strong>
         </p>
         <p>
           <span>Date finalized</span>
-          <strong>March 14, 2026</strong>
+          <strong>{formatDate(row.sharedAt)}</strong>
         </p>
         <p>
           <span>Author</span>
-          <strong>Dr. Elena Rossi, Neurology</strong>
+          <strong>{row.giSpecialistName}</strong>
+        </p>
+        <p>
+          <span>Priority</span>
+          <strong>{row.priorityScore}</strong>
+        </p>
+        <p>
+          <span>Status</span>
+          <strong>{row.status}</strong>
         </p>
       </section>
 
-      <section className="reports-modal-report__section">
-        <h3>Clinical Summary</h3>
-        <p>
-          {row.summary} The patient reports improved tolerance to daily activity with no new
-          neurological deficits, chest pain, or syncopal episodes since prior review.
-        </p>
-      </section>
+      {row.clinicalSummary ? (
+        <section className="reports-modal-report__section">
+          <h3>Clinical Summary</h3>
+          <p style={{ whiteSpace: "pre-wrap" }}>{row.clinicalSummary}</p>
+        </section>
+      ) : null}
 
-      <section className="reports-modal-report__section">
-        <h3>Objective Findings</h3>
-        <ul>
-          <li>Vitals stable at last check: BP 124/78, HR 74, afebrile.</li>
-          <li>
-            Recent CBC/CMP without critical outliers; mild ALT fluctuation remains clinically
-            monitored.
-          </li>
-          <li>Medication reconciliation completed; adherence reported as consistent.</li>
-        </ul>
-      </section>
+      {row.presentingSymptoms || row.aiInsight ? (
+        <section className="reports-modal-report__section">
+          <h3>Presenting symptoms (AI intake)</h3>
+          {row.presentingSymptoms ? (
+            <p>
+              <strong>From the patient:</strong> {row.presentingSymptoms}
+            </p>
+          ) : null}
+          {symptomChips.length > 0 ? (
+            <div className="reports-symptom-chips">
+              {symptomChips.map((symptom) => (
+                <span key={symptom} className="reports-symptom-chip">
+                  {symptom}
+                </span>
+              ))}
+            </div>
+          ) : null}
+          {row.aiInsight ? (
+            <p style={{ whiteSpace: "pre-wrap" }}>
+              <strong>AI symptom summary:</strong> {row.aiInsight}
+            </p>
+          ) : null}
+        </section>
+      ) : null}
 
-      <section className="reports-modal-report__section">
-        <h3>Presenting symptoms (AI intake)</h3>
-        <p>
-          <strong>AI question:</strong> How long have you had reflux symptoms?
-        </p>
-        <p>
-          <strong>AI question:</strong> 1. Describe your main concern
-        </p>
-        <div className="reports-symptom-chips">
-          {profile.presenting.map((symptom) => (
-            <span key={symptom} className="reports-symptom-chip">
-              {symptom}
-            </span>
-          ))}
-        </div>
-        <p>
-          <strong>AI symptom summary:</strong> {profile.ai}
-        </p>
-      </section>
+      {row.giSpecialistPlan ? (
+        <section className="reports-modal-report__section">
+          <h3>GI Specialist Plan</h3>
+          <p style={{ whiteSpace: "pre-wrap" }}>{row.giSpecialistPlan}</p>
+        </section>
+      ) : null}
 
-      <section className="reports-modal-report__section">
-        <h3>Assessment</h3>
-        <p>
-          Current status is clinically stable with moderate ongoing risk requiring scheduled
-          follow-up rather than urgent escalation. No immediate red-flag findings identified in
-          this review window.
-        </p>
-      </section>
+      {row.recommendations.length > 0 ? (
+        <section className="reports-modal-report__section">
+          <h3>Recommendations</h3>
+          <ol>
+            {row.recommendations.map((item, i) => (
+              <li key={`${i}-${item}`}>{item}</li>
+            ))}
+          </ol>
+        </section>
+      ) : null}
 
-      <section className="reports-modal-report__section">
-        <h3>Care Plan and Recommendations</h3>
-        <ol>
-          {row.recommendations.map((item) => (
-            <li key={item}>{item}</li>
-          ))}
-          <li>
-            Maintain symptom diary and bring updates to next appointment for trend review.
-          </li>
-        </ol>
-      </section>
+      {(row.insuranceCarrier || row.insurancePolicyId || row.insuranceGroup) ? (
+        <section className="reports-modal-report__section">
+          <h3>Insurance</h3>
+          <ul>
+            {row.insuranceCarrier ? <li>Carrier: {row.insuranceCarrier}</li> : null}
+            {row.insurancePolicyId ? <li>Policy ID: {row.insurancePolicyId}</li> : null}
+            {row.insuranceGroup ? <li>Group: {row.insuranceGroup}</li> : null}
+          </ul>
+        </section>
+      ) : null}
+
+      {row.medicalFiles.length > 0 ? (
+        <section className="reports-modal-report__section">
+          <h3>Attached medical files</h3>
+          <MedicalFileList files={row.medicalFiles} />
+        </section>
+      ) : null}
 
       <section className="reports-modal-report__section">
         <h3>Escalation Criteria</h3>
@@ -380,51 +553,50 @@ function FinalReportBody({ row, profile }: { row: ReportRow; profile: SymptomPro
   );
 }
 
-function GenericReportBody({
-  row,
-  profile,
-}: {
-  row: ReportRow;
-  profile: SymptomProfile;
-}) {
+function MedicalFileList({ files }: { files: GiMedicalFile[] }) {
   return (
-    <>
-      <p>
-        <strong>Patient:</strong> Jordan Ellis
-      </p>
-      <p>
-        <strong>Case:</strong> {row.caseId}
-      </p>
-      <p>
-        <strong>Presenting symptoms (AI intake):</strong>
-      </p>
-      <p>
-        <strong>AI question:</strong> How long have you had reflux symptoms?
-      </p>
-      <p>
-        <strong>AI question:</strong> 1. Describe your main concern
-      </p>
-      <div className="reports-symptom-chips">
-        {profile.presenting.map((symptom) => (
-          <span key={symptom} className="reports-symptom-chip">
-            {symptom}
-          </span>
-        ))}
-      </div>
-      <p>
-        <strong>AI symptom summary:</strong> {profile.ai}
-      </p>
-      <p>
-        <strong>Summary:</strong> {row.summary}
-      </p>
-      <p>
-        <strong>Recommendations:</strong>
-      </p>
-      <ul>
-        {row.recommendations.map((item) => (
-          <li key={item}>{item}</li>
-        ))}
-      </ul>
-    </>
+    <ul style={{ listStyle: "none", padding: 0, margin: 0, display: "grid", gap: 8 }}>
+      {files.map((f) => (
+        <li
+          key={f.id}
+          style={{
+            display: "flex",
+            alignItems: "center",
+            justifyContent: "space-between",
+            gap: 12,
+            padding: "8px 12px",
+            border: "1px solid #e2e8f0",
+            borderRadius: 8,
+            background: "#f8fafc",
+          }}
+        >
+          <div style={{ display: "grid", gap: 2, minWidth: 0 }}>
+            <strong
+              style={{
+                fontSize: 13,
+                color: "#0f172a",
+                whiteSpace: "nowrap",
+                overflow: "hidden",
+                textOverflow: "ellipsis",
+              }}
+            >
+              {f.fileName}
+            </strong>
+            <span style={{ fontSize: 11, color: "#64748b" }}>
+              {f.docType} · {formatBytes(f.fileSize)} · uploaded by {f.uploadedByName || "—"}
+            </span>
+          </div>
+          <a
+            href={f.docUrl || "#"}
+            target="_blank"
+            rel="noopener noreferrer"
+            className="reports-row-view"
+            style={{ flexShrink: 0 }}
+          >
+            Open
+          </a>
+        </li>
+      ))}
+    </ul>
   );
 }

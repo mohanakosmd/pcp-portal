@@ -5,7 +5,7 @@ import { useState } from "react";
 
 export function ForgotPasswordForm() {
   const router = useRouter();
-  const [email, setEmail] = useState("jhon_travis@outlook.com");
+  const [email, setEmail] = useState("");
 
   const handleSubmit = (event: React.FormEvent<HTMLFormElement>) => {
     event.preventDefault();

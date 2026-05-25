@@ -1,0 +1,65 @@
+# Firebase App Hosting backend configuration.
+# Docs: https://firebase.google.com/docs/app-hosting/configure
+#
+# - `value:` entries are committed in plaintext. Only put non-secret config here.
+#   The NEXT_PUBLIC_FIREBASE_* values are public by design (they ship in the
+#   client bundle), so committing them is expected and safe.
+# - `secret:` entries reference a Cloud Secret Manager secret by name. Create
+#   each one with `firebase apphosting:secrets:set <NAME>` before deploying
+#   (see DEPLOY.md). Never put their values in this file.
+
+runConfig:
+  # Scale to zero when idle to avoid cost; raise minInstances if cold starts hurt.
+  minInstances: 0
+  maxInstances: 100
+  concurrency: 80
+  cpu: 1
+  memoryMiB: 512
+
+env:
+  # --- Public Firebase web config (safe to commit) ---------------------------
+  # NEXT_PUBLIC_* must be available at BUILD (Next.js inlines them) and RUNTIME.
+  - variable: NEXT_PUBLIC_FIREBASE_API_KEY
+    value: AIzaSyBoNdhbDRJi2WQOnHfj3hXL9tEcovcSl2I
+    availability: [BUILD, RUNTIME]
+  - variable: NEXT_PUBLIC_FIREBASE_AUTH_DOMAIN
+    value: aigicare-hipaa.firebaseapp.com
+    availability: [BUILD, RUNTIME]
+  - variable: NEXT_PUBLIC_FIREBASE_PROJECT_ID
+    value: aigicare-hipaa
+    availability: [BUILD, RUNTIME]
+  - variable: NEXT_PUBLIC_FIREBASE_STORAGE_BUCKET
+    value: aigicare-hipaa.firebasestorage.app
+    availability: [BUILD, RUNTIME]
+  - variable: NEXT_PUBLIC_FIREBASE_MESSAGING_SENDER_ID
+    value: "102659401847"
+    availability: [BUILD, RUNTIME]
+  - variable: NEXT_PUBLIC_FIREBASE_APP_ID
+    value: 1:102659401847:web:02982fac03c2d75aaf3e72
+    availability: [BUILD, RUNTIME]
+
+  # Public base URL for absolute links in notification emails.
+  # UPDATE this to your real App Hosting URL (or custom domain) after the first
+  # deploy, then redeploy so it gets baked in. e.g. https://pcp-portal--aigicare-hipaa.us-central1.hosted.app
+  - variable: NEXT_PUBLIC_APP_URL
+    value: https://pcp.aigicare.com
+    availability: [BUILD, RUNTIME]
+
+  # --- Non-secret server config (runtime only) -------------------------------
+  - variable: SENDGRID_SENDER_EMAIL
+    value: admin@aigicare.com
+    availability: [RUNTIME]
+  - variable: SIGNUP_OTP_RECIPIENT
+    value: mohan.pal@akosmdtech.com
+    availability: [RUNTIME]
+
+  # --- Secrets (Cloud Secret Manager; set via `firebase apphosting:secrets:set`) ---
+  - variable: PCP_SESSION_SECRET
+    secret: PCP_SESSION_SECRET
+    availability: [RUNTIME]
+  - variable: SENDGRID_API_KEY
+    secret: SENDGRID_API_KEY
+    availability: [RUNTIME]
+  - variable: GEMINI_API_KEY
+    secret: GEMINI_API_KEY
+    availability: [RUNTIME]

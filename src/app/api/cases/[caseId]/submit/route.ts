@@ -3,6 +3,7 @@ import { NextResponse } from "next/server";
 import { readSessionUserId } from "@/lib/auth";
 import { PCP_CASES_COLLECTION, readCaseOwnedBy } from "@/lib/cases";
 import { nowIso, upsertDocument } from "@/lib/firestore-rest";
+import { emitCaseSubmitted } from "@/lib/notification-events";
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
@@ -43,6 +44,12 @@ export async function POST(
       statusUpdatedAt: now,
       updatedAt: now,
     });
+
+    void emitCaseSubmitted({
+      caseId,
+      caseShortCode: root.shortCode,
+      ownerUserId: userId,
+    }).catch((err) => console.error("[cases submit] emitCaseSubmitted failed:", err));
 
     return NextResponse.json({ ok: true, status: "submitted", submittedAt: now });
   } catch (err) {

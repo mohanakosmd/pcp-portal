@@ -1631,3 +1631,134 @@ html {
     transform: none;
   }
 }
+
+/* Notification bell + dropdown panel. */
+.notif {
+  position: relative;
+  display: inline-flex;
+}
+
+.notif__btn {
+  position: relative;
+}
+
+.notif__badge {
+  position: absolute;
+  top: 2px;
+  right: 2px;
+  min-width: 16px;
+  height: 16px;
+  padding: 0 4px;
+  border-radius: 9999px;
+  background: #dc2626;
+  color: #fff;
+  font-size: 10px;
+  font-weight: 700;
+  line-height: 16px;
+  text-align: center;
+  pointer-events: none;
+}
+
+.notif__panel {
+  position: absolute;
+  top: calc(100% + 6px);
+  right: 0;
+  width: 360px;
+  max-width: calc(100vw - 32px);
+  background: #fff;
+  border: 1px solid var(--dash-border);
+  border-radius: 12px;
+  box-shadow: 0 14px 38px rgba(15, 23, 42, 0.14);
+  z-index: 50;
+  overflow: hidden;
+}
+
+.notif__head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 10px 14px;
+  border-bottom: 1px solid var(--dash-border);
+}
+
+.notif__head strong {
+  font-size: 14px;
+  color: var(--dash-text);
+}
+
+.notif__markall {
+  background: transparent;
+  border: 0;
+  color: var(--dash-accent);
+  font-size: 12px;
+  font-weight: 600;
+  cursor: pointer;
+}
+
+.notif__markall:disabled {
+  color: #94a3b8;
+  cursor: default;
+}
+
+.notif__list {
+  max-height: 420px;
+  overflow-y: auto;
+}
+
+.notif__empty {
+  padding: 18px 14px;
+  margin: 0;
+  color: var(--dash-muted);
+  font-size: 13px;
+  text-align: center;
+}
+
+.notif__item {
+  width: 100%;
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  align-items: flex-start;
+  padding: 10px 14px;
+  background: #fff;
+  border: 0;
+  border-bottom: 1px solid #f1f5f9;
+  text-align: left;
+  cursor: pointer;
+  transition: background 0.12s ease;
+}
+
+.notif__item:last-child {
+  border-bottom: 0;
+}
+
+.notif__item:hover {
+  background: #f8fafc;
+}
+
+.notif__item--unread {
+  background: #eff6ff;
+}
+
+.notif__item--unread:hover {
+  background: #dbeafe;
+}
+
+.notif__title {
+  font-size: 13px;
+  font-weight: 600;
+  color: var(--dash-text);
+}
+
+.notif__body {
+  font-size: 12px;
+  color: var(--dash-muted);
+  line-height: 1.4;
+}
+
+.notif__time {
+  font-size: 11px;
+  color: #94a3b8;
+  margin-top: 4px;
+}
+

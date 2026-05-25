@@ -3,9 +3,14 @@
 
 import { randomBytes } from "crypto";
 
-import { getDocument, listDocuments } from "@/lib/firestore-rest";
+import { getDocument, listDocuments, nowIso, upsertDocument } from "@/lib/firestore-rest";
 
 export const PCP_CASES_COLLECTION = "pcp_cases";
+
+// GI specialists publish reports into this collection (from the GI portal),
+// keyed back to a pcp_cases doc via `case_id`. Defined here (rather than
+// imported from gi-reports.ts) to avoid a circular import.
+const GI_SHARED_REPORTS_COLLECTION = "gi_shared_reports";
 
 export type CaseStatus =
   | "draft"
@@ -49,6 +54,7 @@ export type CaseRootDoc = {
   healthComplete: boolean;
   documentsCount: number;
   submittedAt: string | null;
+  sharedWithGiUserId: string | null;
   sharedWithGiUser: string | null;
   sharedWithGiAt: string | null;
   statusUpdatedAt: string;
@@ -233,6 +239,10 @@ export type CaseListItem = {
   sharedWithGiAtIso: string | null;
   statusUpdatedAtIso: string;
   documentsCount: number;
+  // True when a GI specialist has published a report for this case
+  // (a gi_shared_reports doc exists). Drives the "Final disposition" status
+  // + the highlighted tile on the Cases page.
+  hasFinalReport: boolean;
   // Gemini-generated clinical summary for the report modal (null until first
   // generation). aiFirstSummary is kept as a quick fallback truncation of the
   // inbox message.
@@ -301,6 +311,26 @@ function formatUpdated(iso: string): { full: string; short: string } {
 }
 
 /**
+ * Returns the set of pcp_cases ids that have at least one GI-published report
+ * (a gi_shared_reports doc whose `case_id` points at them). Best-effort: a
+ * missing collection or query error yields an empty set rather than throwing.
+ */
+async function listCaseIdsWithSharedReports(): Promise<Set<string>> {
+  const set = new Set<string>();
+  try {
+    const page = await listDocuments(GI_SHARED_REPORTS_COLLECTION, { pageSize: 500 });
+    for (const d of page.docs) {
+      if (d.id.startsWith("_")) continue;
+      const caseId = typeof d.data.case_id === "string" ? d.data.case_id : "";
+      if (caseId) set.add(caseId);
+    }
+  } catch (err) {
+    console.error("[cases] listCaseIdsWithSharedReports failed:", err);
+  }
+  return set;
+}
+
+/**
  * Loads the full UI-shaped case list for the given owner. Joins each case's
  * `about/data` and `health/data` subcollection docs so the patient header and
  * AI summary fields are populated. Sorted by createdAt desc.
@@ -309,7 +339,10 @@ export async function loadCasesForOwner(
   userId: string,
   opts: { limit?: number } = {}
 ): Promise<CaseListItem[]> {
-  const page = await listDocuments(PCP_CASES_COLLECTION, { pageSize: 200 });
+  const [page, reportCaseIds] = await Promise.all([
+    listDocuments(PCP_CASES_COLLECTION, { pageSize: 200 }),
+    listCaseIdsWithSharedReports(),
+  ]);
   const owned = page.docs
     .filter((d) => !d.id.startsWith("_"))
     .filter((d) => d.data.ownerUserId === userId)
@@ -328,10 +361,32 @@ export async function loadCasesForOwner(
       const about = (aboutDoc?.data ?? {}) as Partial<CaseAboutDoc>;
       const health = (healthDoc?.data ?? {}) as Partial<CaseHealthDoc>;
 
-      const status: CaseStatus =
+      const storedStatus: CaseStatus =
         (typeof root.data.status === "string" ? (root.data.status as CaseStatus) : "draft") ||
         "draft";
+
+      // A published GI report means the case has reached final disposition.
+      // Reconcile the stored status (best-effort) so dashboard counts + other
+      // readers agree, and reflect it immediately in this response.
+      const hasFinalReport = reportCaseIds.has(root.id);
+      const status: CaseStatus =
+        hasFinalReport && storedStatus !== "closed" ? "completed" : storedStatus;
+      if (hasFinalReport && storedStatus !== "completed" && storedStatus !== "closed") {
+        const now = nowIso();
+        void upsertDocument(PCP_CASES_COLLECTION, root.id, {
+          status: "completed",
+          statusUpdatedAt: now,
+          updatedAt: now,
+        }).catch((err) =>
+          console.error(`[cases] final-disposition reconcile failed for ${root.id}:`, err)
+        );
+      }
+
       const display = STATUS_DISPLAY[status] ?? STATUS_DISPLAY.draft;
+      // When a report exists, surface it as the more specific "Final
+      // disposition" rather than the generic "Completed".
+      const statusLabel = hasFinalReport ? "Final disposition" : display.label;
+      const statusVariant = hasFinalReport ? "emerald" : display.variant;
 
       const fallbackEmail =
         typeof about.email === "string" ? about.email : "";
@@ -397,8 +452,8 @@ export async function loadCasesForOwner(
         mrn: `#${shortCode}`,
         demo: demo || "—",
         dob: orDash(about.dateOfBirth),
-        status: display.label,
-        statusVariant: display.variant,
+        status: statusLabel,
+        statusVariant,
         updated: updated.full,
         shortUpdated: updated.short,
         condition: display.condition,
@@ -418,6 +473,7 @@ export async function loadCasesForOwner(
         sharedWithGiAtIso,
         statusUpdatedAtIso,
         documentsCount,
+        hasFinalReport,
         aiSummary,
         aiSummaryGeneratedAtIso,
       };

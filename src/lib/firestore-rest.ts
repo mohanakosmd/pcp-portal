@@ -279,6 +279,94 @@ export async function createDocument(
   };
 }
 
+/**
+ * Create a document with a server-generated ID (Firestore auto-ID) by POSTing
+ * to the collection — the equivalent of `addDoc()`. Returns the new doc,
+ * including its generated `id`.
+ */
+export async function addDocument(
+  collection: string,
+  data: Record<string, unknown>
+): Promise<StoredDoc> {
+  const url = withKey(`${baseUrl()}/${encodePath(collection)}`);
+  const payload = { fields: encodeFields(data) };
+  const { status, body } = await fetchJson(
+    url,
+    {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(payload),
+    },
+    `Firestore ADD ${collection}`
+  );
+  ensureOk(status, body, `Firestore ADD ${collection}`);
+  const doc = body as FsDocument;
+  return {
+    id: docIdFromName(doc.name),
+    data: decodeFields(doc),
+    createTime: doc.createTime,
+    updateTime: doc.updateTime,
+  };
+}
+
+export type EqualityFilter = { field: string; value: unknown };
+
+/**
+ * Run a structured query against a single collection, AND-ing together a set
+ * of equality filters. Returns the matching docs. Pass a small `limit`; this
+ * helper does not paginate.
+ *
+ * Note: a single equality filter is served by Firestore's automatic
+ * single-field index. Multiple equality filters may require a composite index
+ * — prefer filtering on one field here and narrowing the rest in code.
+ */
+export async function queryDocuments(
+  collection: string,
+  filters: EqualityFilter[],
+  opts: { limit?: number } = {}
+): Promise<StoredDoc[]> {
+  const fieldFilters = filters.map((f) => ({
+    fieldFilter: {
+      field: { fieldPath: f.field },
+      op: "EQUAL",
+      value: encodeValue(f.value),
+    },
+  }));
+
+  const structuredQuery: Record<string, unknown> = {
+    from: [{ collectionId: collection }],
+  };
+  if (fieldFilters.length === 1) {
+    structuredQuery.where = fieldFilters[0];
+  } else if (fieldFilters.length > 1) {
+    structuredQuery.where = { compositeFilter: { op: "AND", filters: fieldFilters } };
+  }
+  if (opts.limit) structuredQuery.limit = opts.limit;
+
+  const { status, body } = await fetchJson(
+    withKey(`${baseUrl()}:runQuery`),
+    {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ structuredQuery }),
+    },
+    `Firestore QUERY ${collection}`
+  );
+  ensureOk(status, body, `Firestore QUERY ${collection}`);
+  const rows = (body as Array<{ document?: FsDocument }>) ?? [];
+  const docs: StoredDoc[] = [];
+  for (const row of rows) {
+    if (!row.document) continue;
+    docs.push({
+      id: docIdFromName(row.document.name),
+      data: decodeFields(row.document),
+      createTime: row.document.createTime,
+      updateTime: row.document.updateTime,
+    });
+  }
+  return docs;
+}
+
 export type ListPage = {
   docs: StoredDoc[];
   nextPageToken?: string;

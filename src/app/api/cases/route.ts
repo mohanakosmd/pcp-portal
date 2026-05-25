@@ -9,6 +9,7 @@ import {
   type CaseRootDoc,
 } from "@/lib/cases";
 import { createDocument, listDocuments, nowIso } from "@/lib/firestore-rest";
+import { emitCaseCreated } from "@/lib/notification-events";
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
@@ -33,6 +34,7 @@ export async function POST() {
     healthComplete: false,
     documentsCount: 0,
     submittedAt: null,
+    sharedWithGiUserId: null,
     sharedWithGiUser: null,
     sharedWithGiAt: null,
     statusUpdatedAt: now,
@@ -44,6 +46,12 @@ export async function POST() {
     await createDocument(PCP_CASES_COLLECTION, caseId, {
       ...initial,
     });
+    // Fire-and-forget: notification + email must never block case creation.
+    void emitCaseCreated({
+      caseId,
+      caseShortCode: initial.shortCode,
+      ownerUserId: userId,
+    }).catch((err) => console.error("[cases POST] emitCaseCreated failed:", err));
     return NextResponse.json({ ok: true, caseId, ...initial });
   } catch (err) {
     console.error("[cases POST] error:", err);

@@ -174,6 +174,7 @@ export function CreateCaseForm({
     initialCase?.health.inboxMessage ?? ""
   );
   const [speechStatus, setSpeechStatus] = useState("Speech input is ready. You can type anytime.");
+  const [isListening, setIsListening] = useState(false);
   const fileInputRef = useRef<HTMLInputElement | null>(null);
   const mainRef = useRef<HTMLElement | null>(null);
   const formRef = useRef<HTMLFormElement | null>(null);
@@ -601,22 +602,32 @@ export function CreateCaseForm({
   type SpeechRecognitionResult = {
     transcript: string;
   };
-  type SpeechRecognitionEvent = Event & {
-    results: ArrayLike<ArrayLike<SpeechRecognitionResult>>;
+  type SpeechRecognitionAlternatives = ArrayLike<SpeechRecognitionResult> & {
+    isFinal?: boolean;
   };
+  type SpeechRecognitionEvent = Event & {
+    resultIndex: number;
+    results: ArrayLike<SpeechRecognitionAlternatives>;
+  };
+  type SpeechRecognitionErrorEvent = Event & { error?: string };
   type SpeechRecognitionLike = {
     lang: string;
+    continuous: boolean;
     interimResults: boolean;
     maxAlternatives: number;
     start: () => void;
+    stop: () => void;
+    abort: () => void;
     addEventListener: (
-      type: "result" | "error",
-      listener: (event: SpeechRecognitionEvent) => void
+      type: "result" | "error" | "end" | "start",
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      listener: (event: any) => void
     ) => void;
   };
   type SpeechRecognitionConstructor = new () => SpeechRecognitionLike;
 
   const recognitionRef = useRef<SpeechRecognitionLike | null>(null);
+  const listeningRef = useRef(false);
   const [speechSupported, setSpeechSupported] = useState(true);
 
   useEffect(() => {
@@ -634,27 +645,139 @@ export function CreateCaseForm({
     }
     const recognition = new Ctor();
     recognition.lang = "en-US";
-    recognition.interimResults = false;
+    // Continuous + interim so the user can dictate multiple sentences without
+    // re-clicking, and partial results show up immediately as visible feedback.
+    recognition.continuous = true;
+    recognition.interimResults = true;
     recognition.maxAlternatives = 1;
-    recognition.addEventListener("result", (event) => {
-      const first = event.results?.[0]?.[0];
-      const text = first?.transcript?.trim();
-      if (!text) return;
-      setInboxMessage((prev) => (prev ? `${prev} ${text}` : text));
-      setSpeechStatus("Speech captured. You can continue speaking or edit manually.");
+
+    recognition.addEventListener("start", () => {
+      listeningRef.current = true;
+      setIsListening(true);
+      setSpeechStatus("Listening… click the mic again to stop.");
     });
-    recognition.addEventListener("error", () => {
-      setSpeechStatus("Speech capture failed. Please type your message.");
+
+    recognition.addEventListener("result", (event: SpeechRecognitionEvent) => {
+      // Walk only the new results since the last event (resultIndex onwards),
+      // append finalized text to the textarea, keep the interim chunk visible
+      // as a status hint so the user sees what's being heard live.
+      let finalText = "";
+      let interimText = "";
+      for (let i = event.resultIndex; i < event.results.length; i++) {
+        const alt = event.results[i];
+        const transcript = alt?.[0]?.transcript ?? "";
+        if (alt?.isFinal) finalText += transcript;
+        else interimText += transcript;
+      }
+      const finalized = finalText.trim();
+      if (finalized) {
+        setInboxMessage((prev) =>
+          prev ? `${prev.replace(/\s+$/, "")} ${finalized}` : finalized
+        );
+      }
+      const interim = interimText.trim();
+      if (interim) {
+        setSpeechStatus(`Listening… "${interim}"`);
+      } else if (finalized) {
+        setSpeechStatus("Listening… keep talking, or click the mic to stop.");
+      }
     });
+
+    recognition.addEventListener("error", (event: SpeechRecognitionErrorEvent) => {
+      const code = event.error || "";
+      if (code === "no-speech") {
+        setSpeechStatus("Didn't catch that. Click the mic to try again.");
+      } else if (code === "not-allowed" || code === "service-not-allowed") {
+        setSpeechStatus(
+          "Microphone is blocked. Click the lock or 🎤 icon in your browser's address bar, set Microphone to Allow for this site, then click the mic again."
+        );
+      } else if (code === "aborted") {
+        setSpeechStatus("Speech capture stopped.");
+      } else if (code === "audio-capture") {
+        setSpeechStatus(
+          "No microphone was detected. Plug one in (or check OS sound settings) and try again."
+        );
+      } else if (code === "network") {
+        setSpeechStatus("Speech service couldn't reach the network. Check your connection.");
+      } else {
+        setSpeechStatus("Speech capture failed. Please type your message.");
+      }
+    });
+
+    recognition.addEventListener("end", () => {
+      listeningRef.current = false;
+      setIsListening(false);
+      setSpeechStatus((prev) =>
+        prev.startsWith("Listening")
+          ? "Speech captured. Click the mic to dictate again."
+          : prev
+      );
+    });
+
     recognitionRef.current = recognition;
+
+    return () => {
+      // Stop any in-flight recognition when the component unmounts.
+      try {
+        if (listeningRef.current) recognition.abort();
+      } catch {
+        // best effort
+      }
+    };
   }, []);
 
-  const handleStartSpeech = () => {
+  const handleStartSpeech = async () => {
     const recognition = recognitionRef.current;
     if (!recognition) return;
+    // Toggle: clicking the mic while it's listening stops the capture.
+    if (listeningRef.current) {
+      try {
+        recognition.stop();
+      } catch {
+        // ignore
+      }
+      return;
+    }
+    // Speech Recognition needs a secure context. http:// (other than
+    // localhost) won't get a prompt at all — surface that clearly.
+    if (typeof window !== "undefined" && !window.isSecureContext) {
+      setSpeechStatus(
+        "Speech input needs a secure (https://) connection. Reload over https or use localhost."
+      );
+      return;
+    }
+    // Force a fresh permission prompt before kicking off SpeechRecognition.
+    // SpeechRecognition's own prompt is finicky on some browsers when a
+    // previous denial is cached; getUserMedia gives a clean, predictable one
+    // and lets us surface a clear error message before the recognizer fires.
+    try {
+      if (
+        typeof navigator !== "undefined" &&
+        navigator.mediaDevices?.getUserMedia
+      ) {
+        const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
+        // Don't actually keep the stream — SpeechRecognition opens its own.
+        stream.getTracks().forEach((t) => t.stop());
+      }
+    } catch (err) {
+      const name = (err as { name?: string })?.name ?? "";
+      if (name === "NotAllowedError" || name === "SecurityError") {
+        setSpeechStatus(
+          "Microphone is blocked. Click the lock or 🎤 icon in your browser's address bar, set Microphone to Allow for this site, then click the mic again."
+        );
+        return;
+      }
+      if (name === "NotFoundError" || name === "OverconstrainedError") {
+        setSpeechStatus(
+          "No microphone was detected. Plug one in (or check OS sound settings) and try again."
+        );
+        return;
+      }
+      // Other errors (NotReadableError, etc.) — let recognition.start() try
+      // and produce its own error event.
+    }
     try {
       recognition.start();
-      setSpeechStatus("Listening... please speak now.");
     } catch {
       setSpeechStatus("Unable to start speech capture. Please try again or type manually.");
     }
@@ -806,6 +929,7 @@ export function CreateCaseForm({
           onInboxChange={setInboxMessage}
           speechStatus={speechStatus}
           speechSupported={speechSupported}
+          isListening={isListening}
           onStartSpeech={handleStartSpeech}
         />
         <Step3Panel
@@ -1249,6 +1373,7 @@ type Step2PanelProps = {
   onInboxChange: (value: string) => void;
   speechStatus: string;
   speechSupported: boolean;
+  isListening: boolean;
   onStartSpeech: () => void;
 };
 
@@ -1258,6 +1383,7 @@ function Step2Panel({
   onInboxChange,
   speechStatus,
   speechSupported,
+  isListening,
   onStartSpeech,
 }: Step2PanelProps) {
   return (
@@ -1340,9 +1466,10 @@ function Step2Panel({
               <div className="cc-speech-action-row">
                 <button
                   type="button"
-                  className="cc-speech-btn"
-                  aria-label="Start speech to text"
-                  title="Speak-to-Text"
+                  className={`cc-speech-btn${isListening ? " cc-speech-btn--listening" : ""}`}
+                  aria-label={isListening ? "Stop speech to text" : "Start speech to text"}
+                  aria-pressed={isListening}
+                  title={isListening ? "Stop recording" : "Speak-to-Text"}
                   onClick={onStartSpeech}
                   disabled={!speechSupported}
                 >

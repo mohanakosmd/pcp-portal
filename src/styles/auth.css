@@ -750,6 +750,26 @@ p.otp-timer {
   margin-bottom: 6px;
 }
 
+.access-pending {
+  align-items: center;
+  text-align: center;
+}
+
+.access-pending .section-title,
+.access-pending .section-hint {
+  width: 100%;
+}
+
+.access-pending__icon {
+  width: 64px;
+  height: 64px;
+  border-radius: 50%;
+  display: grid;
+  place-items: center;
+  background: #dcfce7;
+  margin: 4px auto 2px;
+}
+
 .access-form .btn-primary {
   margin-top: 6px;
 }

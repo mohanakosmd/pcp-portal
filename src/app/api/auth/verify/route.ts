@@ -1,9 +1,7 @@
 import { NextResponse } from "next/server";
 
-import { setSessionCookie } from "@/lib/auth";
-import { PCP_USERS_COLLECTION } from "@/lib/firebase";
 import { getDocument, nowIso, upsertDocument } from "@/lib/firestore-rest";
-import { claimUniqueness } from "@/lib/pcp-uniqueness";
+import { SIGNUP_REQUESTS_COLLECTION } from "@/lib/signup-requests";
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
@@ -25,29 +23,43 @@ export async function POST(request: Request) {
     return NextResponse.json({ error: "Invalid JSON body." }, { status: 400 });
   }
 
-  const userId = typeof body.userId === "string" ? body.userId.trim() : "";
+  const requestId = typeof body.userId === "string" ? body.userId.trim() : "";
   const submittedCode = typeof body.code === "string" ? body.code.trim() : "";
 
-  if (!userId || !submittedCode) {
-    return NextResponse.json({ error: "Missing userId or code." }, { status: 400 });
+  if (!requestId || !submittedCode) {
+    return NextResponse.json({ error: "Missing request id or code." }, { status: 400 });
   }
   if (!/^\d{6}$/.test(submittedCode)) {
     return NextResponse.json({ error: "Enter the 6-digit code." }, { status: 400 });
   }
 
   try {
-    const existing = await getDocument(PCP_USERS_COLLECTION, userId);
+    const existing = await getDocument(SIGNUP_REQUESTS_COLLECTION, requestId);
     if (!existing) {
       return NextResponse.json(
-        { error: "Signup record not found. Please start again." },
+        { error: "Signup request not found. Please start again." },
         { status: 404 }
       );
     }
 
     const data = existing.data;
-    if (data.verified === true) {
-      await setSessionCookie(userId);
-      return NextResponse.json({ ok: true, alreadyVerified: true });
+
+    if (data.status === "approved") {
+      return NextResponse.json({
+        ok: true,
+        status: "approved",
+        message: "Your registration is already approved. Please log in.",
+      });
+    }
+
+    // Already verified — report state. The registration is awaiting admin
+    // approval; nothing further for the user to do.
+    if (data.emailVerified === true) {
+      return NextResponse.json({
+        ok: true,
+        status: "pending",
+        alreadyVerified: true,
+      });
     }
 
     const attempts = typeof data.otpAttempts === "number" ? data.otpAttempts : 0;
@@ -64,39 +76,28 @@ export async function POST(request: Request) {
     }
 
     if (data.otpCode !== submittedCode) {
-      await upsertDocument(PCP_USERS_COLLECTION, userId, {
+      await upsertDocument(SIGNUP_REQUESTS_COLLECTION, requestId, {
         otpAttempts: attempts + 1,
         updatedAt: nowIso(),
       });
       return NextResponse.json({ error: "Incorrect code." }, { status: 400 });
     }
 
-    // Atomically claim the email + phone uniqueness keys. A racing signup
-    // could have claimed them between signup-time pre-check and now.
-    const userEmail = typeof data.email === "string" ? data.email : "";
-    const userPhone = typeof data.mobile === "string" ? data.mobile : "";
-    const claim = await claimUniqueness({ userId, email: userEmail, phone: userPhone });
-    if (!claim.ok) {
-      const fieldLabel = claim.field === "email" ? "email" : "phone number";
-      return NextResponse.json(
-        { error: `This ${fieldLabel} was claimed by another account. Please use a different one.` },
-        { status: 409 }
-      );
-    }
-
+    // OTP correct — mark email verified. The request stays "pending" for the
+    // admin to review. No pcp_users doc and no session are created here; the
+    // external admin portal provisions the account on approval.
     const now = nowIso();
-    await upsertDocument(PCP_USERS_COLLECTION, userId, {
-      verified: true,
-      verifiedAt: now,
+    await upsertDocument(SIGNUP_REQUESTS_COLLECTION, requestId, {
+      emailVerified: true,
+      emailVerifiedAt: now,
+      status: "pending",
       otpCode: null,
       otpExpiresAt: null,
       otpAttempts: 0,
       updatedAt: now,
     });
 
-    await setSessionCookie(userId);
-
-    return NextResponse.json({ ok: true });
+    return NextResponse.json({ ok: true, status: "pending" });
   } catch (err) {
     console.error("[verify] Firestore error:", err);
     const message = err instanceof Error ? err.message : "Failed to talk to Firestore.";

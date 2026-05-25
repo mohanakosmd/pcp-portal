@@ -207,6 +207,33 @@
   background: linear-gradient(180deg, var(--dash-accent-bright), var(--dash-accent));
 }
 
+/* Case has a published GI report — final disposition reached. */
+.cases-tile--final {
+  border-color: rgba(16, 163, 74, 0.4);
+  background: linear-gradient(180deg, rgba(220, 252, 231, 0.55), rgba(255, 255, 255, 0.96));
+  box-shadow: 0 0 0 1px rgba(16, 163, 74, 0.16), 0 10px 30px -18px rgba(5, 122, 85, 0.4);
+}
+
+.cases-tile--final::before {
+  opacity: 1;
+  background: linear-gradient(180deg, #16a34a, #059669);
+}
+
+.cases-tile__report-flag {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  padding: 3px 9px;
+  border-radius: 999px;
+  font-size: 10px;
+  font-weight: 700;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+  color: #047857;
+  background: #d1fae5;
+  border: 1px solid rgba(5, 150, 105, 0.35);
+}
+
 .cases-tile__top {
   display: flex;
   align-items: center;

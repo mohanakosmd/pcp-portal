@@ -5,8 +5,7 @@ import { useRouter } from "next/navigation";
 import { useEffect, useState } from "react";
 
 import type { CaseListItem, CaseListPillVariant } from "@/lib/cases";
-
-import { GI_USERS } from "./cases-data";
+import type { GiUser } from "@/lib/gi-users";
 
 const STORAGE_KEY = "pcp-cases-saved-collapsed";
 
@@ -37,6 +36,9 @@ export function CasesView({ cases }: { cases: CaseListItem[] }) {
   const [shareError, setShareError] = useState(false);
   const [shareSubmitting, setShareSubmitting] = useState(false);
   const [shareErrorMessage, setShareErrorMessage] = useState<string>("");
+  const [giUsers, setGiUsers] = useState<GiUser[]>([]);
+  const [giUsersLoading, setGiUsersLoading] = useState(false);
+  const [giUsersError, setGiUsersError] = useState<string>("");
   const [reportOpen, setReportOpen] = useState(false);
   const [isEditing, setIsEditing] = useState(false);
   const [imagePreview, setImagePreview] = useState<InsuranceImagePreview>(null);
@@ -170,6 +172,41 @@ export function CasesView({ cases }: { cases: CaseListItem[] }) {
     setShareOpen(true);
   };
 
+  // Lazy-load GI users the first time the share modal is opened. Refetches
+  // on each open so freshly-seeded users show up without a page reload.
+  useEffect(() => {
+    if (!shareOpen) return;
+    let cancelled = false;
+    setGiUsersLoading(true);
+    setGiUsersError("");
+    fetch("/api/gi-users")
+      .then(async (r) => {
+        const data = (await r.json().catch(() => ({}))) as {
+          giUsers?: GiUser[];
+          error?: string;
+        };
+        if (!r.ok) throw new Error(data.error || `Failed (${r.status})`);
+        return Array.isArray(data.giUsers) ? data.giUsers : [];
+      })
+      .then((list) => {
+        if (cancelled) return;
+        setGiUsers(list);
+      })
+      .catch((err: unknown) => {
+        if (cancelled) return;
+        setGiUsersError(
+          err instanceof Error ? err.message : "Could not load GI specialists."
+        );
+        setGiUsers([]);
+      })
+      .finally(() => {
+        if (!cancelled) setGiUsersLoading(false);
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [shareOpen]);
+
   const submitShare = async (event: React.FormEvent<HTMLFormElement>) => {
     event.preventDefault();
     if (!selectedCase) return;
@@ -191,7 +228,7 @@ export function CasesView({ cases }: { cases: CaseListItem[] }) {
       const response = await fetch(`/api/cases/${selectedCase.id}/share`, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ giUser: shareSelected }),
+        body: JSON.stringify({ giUserId: shareSelected }),
       });
       const data = (await response.json().catch(() => ({}))) as { error?: string };
       if (!response.ok) {
@@ -352,6 +389,9 @@ export function CasesView({ cases }: { cases: CaseListItem[] }) {
         error={shareError}
         submitting={shareSubmitting}
         errorMessage={shareErrorMessage}
+        giUsers={giUsers}
+        loading={giUsersLoading}
+        loadError={giUsersError}
       />
 
       {selectedCase ? (
@@ -389,7 +429,9 @@ function CaseTile({
   return (
     <button
       type="button"
-      className={`cases-tile${isSelected ? " is-selected" : ""}`}
+      className={`cases-tile${isSelected ? " is-selected" : ""}${
+        record.hasFinalReport ? " cases-tile--final" : ""
+      }`}
       role="listitem"
       onClick={onSelect}
     >
@@ -408,6 +450,9 @@ function CaseTile({
       </div>
       <div className="cases-tile__badges">
         <span className={pillClass(record.statusVariant)}>{record.status}</span>
+        {record.hasFinalReport ? (
+          <span className="cases-tile__report-flag">Report ready</span>
+        ) : null}
       </div>
       <div className="cases-tile__foot">
         <span className="cases-tile__updated">{record.shortUpdated}</span>
@@ -549,8 +594,17 @@ function buildTimelineSteps(record: CaseListItem): TimelineStep[] {
     });
   }
 
-  // 4) Final disposition — GI specialist accepted and is communicating with PCP.
-  if (status === "completed") {
+  // 4) Final disposition — reached when the GI specialist publishes a report.
+  if (record.hasFinalReport) {
+    steps.push({
+      title: "Final disposition",
+      state: "done",
+      meta: dispositionDate
+        ? `GI report ready · ${dispositionDate}`
+        : "GI report ready — see Reports",
+      badge: "Report ready",
+    });
+  } else if (status === "completed") {
     steps.push({
       title: "Final disposition",
       state: "current",
@@ -608,6 +662,9 @@ function ShareGiModal({
   error,
   submitting,
   errorMessage,
+  giUsers,
+  loading,
+  loadError,
 }: {
   open: boolean;
   onClose: () => void;
@@ -617,6 +674,9 @@ function ShareGiModal({
   error: boolean;
   submitting: boolean;
   errorMessage: string;
+  giUsers: GiUser[];
+  loading: boolean;
+  loadError: string;
 }) {
   return (
     <div className="cases-share-modal" hidden={!open}>
@@ -647,23 +707,34 @@ function ShareGiModal({
             role="radiogroup"
             aria-label="GI users"
           >
-            {GI_USERS.map((doctor) => (
-              <label key={doctor} className="cases-share-modal__item">
-                <input
-                  type="radio"
-                  name="giUser"
-                  value={doctor}
-                  checked={selected === doctor}
-                  onChange={() => onSelectedChange(doctor)}
-                />
-                <span>{doctor}</span>
-              </label>
-            ))}
+            {loading ? (
+              <p className="cases-share-modal__helper">Loading GI specialists…</p>
+            ) : giUsers.length === 0 ? (
+              <p className="cases-share-modal__helper">
+                No GI specialists are configured yet.
+              </p>
+            ) : (
+              giUsers.map((doctor) => (
+                <label key={doctor.id} className="cases-share-modal__item">
+                  <input
+                    type="radio"
+                    name="giUser"
+                    value={doctor.id}
+                    checked={selected === doctor.id}
+                    onChange={() => onSelectedChange(doctor.id)}
+                  />
+                  <span>{doctor.displayName}</span>
+                </label>
+              ))
+            )}
           </div>
           {error ? (
             <p className="cases-share-modal__error">
               Please select at least one GI user.
             </p>
+          ) : null}
+          {loadError ? (
+            <p className="cases-share-modal__error">{loadError}</p>
           ) : null}
           {errorMessage ? (
             <p className="cases-share-modal__error">{errorMessage}</p>
