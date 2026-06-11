@@ -11,7 +11,17 @@ import {
   type FormEvent,
 } from "react";
 
+import { ageFromDob } from "@/lib/age";
+import { formatUsPhone, isValidUsPhone } from "@/lib/phone";
+import { US_STATES, phoneStateMismatch, usStateName } from "@/lib/us-area-codes";
+
+import { MedicationPicker } from "./MedicationPicker";
+
 type StepNumber = 1 | 2 | 3;
+
+// The three document upload widgets, each validated/highlighted independently.
+type DocSection = "primary" | "lab" | "other";
+type DocErrorMap = Record<DocSection, string[]>;
 
 const STEPS: { id: StepNumber; label: string }[] = [
   { id: 1, label: "About you" },
@@ -23,6 +33,19 @@ const NEXT_LABELS: Record<StepNumber, string> = {
   1: "Next: Medical history",
   2: "Next: Document upload",
   3: "Submit case",
+};
+
+// Maps a Step 1 form field `name` → the error key used in fieldErrors, so a
+// single form-level change handler can clear a field's message as the user
+// fixes it.
+const ABOUT_FIELD_ERROR_KEYS: Record<string, string> = {
+  full_name: "fullLegalName",
+  date_of_birth: "dateOfBirth",
+  gender: "gender",
+  state: "state",
+  address: "address",
+  phone: "mobile",
+  email: "email",
 };
 
 type UploadStatus = "pending" | "uploading" | "done" | "error";
@@ -56,10 +79,10 @@ export type InitialCase = {
   currentStep: 1 | 2 | 3;
   about: {
     fullLegalName: string;
-    age: string;
     gender: string;
     dateOfBirth: string;
     address: string;
+    state: string;
     mobile: string;
     email: string;
     insuranceCarrier: string;
@@ -69,7 +92,7 @@ export type InitialCase = {
     insuranceFrontUrl: string | null;
     insuranceBackUrl: string | null;
   };
-  health: { inboxMessage: string };
+  health: { inboxMessage: string; currentMedications: string };
   documents: InitialCaseDocument[];
 };
 
@@ -77,6 +100,17 @@ export type InitialCase = {
 // route — checked client-side (on the post-compression bytes) so oversized
 // files are rejected instantly instead of after a failed round-trip.
 const MAX_UPLOAD_BYTES = 5 * 1024 * 1024;
+
+// Supported document formats. The picker's `accept` and the drag-and-drop
+// filter both use this list, and the upload area displays it to the user.
+const ACCEPTED_DOC_EXTENSIONS = [".jpg", ".jpeg", ".png", ".pdf"];
+const ACCEPTED_DOC_ACCEPT = ACCEPTED_DOC_EXTENSIONS.join(",");
+const ACCEPTED_DOC_LABEL = "JPG, PNG, PDF";
+
+function isAcceptedDocType(file: File): boolean {
+  const name = file.name.toLowerCase();
+  return ACCEPTED_DOC_EXTENSIONS.some((ext) => name.endsWith(ext));
+}
 
 function formatBytes(bytes: number): string {
   if (!Number.isFinite(bytes) || bytes <= 0) return "—";
@@ -170,8 +204,16 @@ export function CreateCaseForm({
       : initialFiles
   );
   const [isDragOver, setIsDragOver] = useState(false);
+  const [docErrors, setDocErrors] = useState<DocErrorMap>({
+    primary: [],
+    lab: [],
+    other: [],
+  });
   const [inboxMessage, setInboxMessage] = useState(
     initialCase?.health.inboxMessage ?? ""
+  );
+  const [currentMedications, setCurrentMedications] = useState(
+    initialCase?.health.currentMedications ?? ""
   );
   const [speechStatus, setSpeechStatus] = useState("Speech input is ready. You can type anytime.");
   const [isListening, setIsListening] = useState(false);
@@ -182,8 +224,17 @@ export function CreateCaseForm({
   const [caseId, setCaseId] = useState<string>(initialCase?.caseId ?? "");
   const [saving, setSaving] = useState(false);
   const [serverError, setServerError] = useState("");
-  // Green confirmation shown after "Save draft" — the user stays on the step.
-  const [savedNotice, setSavedNotice] = useState("");
+  // Per-field validation messages for the About step, keyed by the field key
+  // used in readAboutFromForm (fullLegalName, dateOfBirth, gender, state,
+  // address, mobile, email). Shown inline under each field.
+  const [fieldErrors, setFieldErrors] = useState<Record<string, string>>({});
+  // Transient toast shown after "Save draft" (the user stays on the step).
+  const [toast, setToast] = useState<{
+    message: string;
+    state: "show" | "leave" | "hidden";
+  }>({ message: "", state: "hidden" });
+  const toastHideTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const toastResetTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
   // Highest step unlocked. You can only advance past a step (or jump to a
   // later tab) once the current part is complete — see handleNext. When
   // resuming a saved draft, every step is already unlocked.
@@ -199,9 +250,35 @@ export function CreateCaseForm({
     back: initialCase?.about.insuranceBackUrl ?? null,
   };
   const aboutDefaults = initialCase?.about ?? null;
+  // Age is no longer entered — it's derived live from the date of birth and
+  // shown read-only next to the DOB field.
+  const [computedAge, setComputedAge] = useState<number | null>(() =>
+    ageFromDob(initialCase?.about.dateOfBirth ?? null)
+  );
 
   const handleInsuranceChange = (side: "front" | "back", file: File | null) => {
     setInsuranceFiles((prev) => ({ ...prev, [side]: file }));
+  };
+
+  useEffect(() => {
+    return () => {
+      if (toastHideTimer.current) clearTimeout(toastHideTimer.current);
+      if (toastResetTimer.current) clearTimeout(toastResetTimer.current);
+    };
+  }, []);
+
+  const showToast = (message: string) => {
+    if (toastHideTimer.current) clearTimeout(toastHideTimer.current);
+    if (toastResetTimer.current) clearTimeout(toastResetTimer.current);
+    setToast({ message, state: "show" });
+    toastHideTimer.current = setTimeout(
+      () => setToast((p) => ({ ...p, state: "leave" })),
+      4000
+    );
+    toastResetTimer.current = setTimeout(
+      () => setToast({ message: "", state: "hidden" }),
+      4500
+    );
   };
 
   const progressPercent = useMemo(() => (currentStep / STEPS.length) * 100, [currentStep]);
@@ -213,7 +290,6 @@ export function CreateCaseForm({
   const goToStep = useCallback(
     (step: StepNumber) => {
       setCurrentStep(step);
-      setSavedNotice("");
       scrollToTop();
     },
     [scrollToTop]
@@ -260,10 +336,10 @@ export function CreateCaseForm({
     };
     return {
       fullLegalName: get("full_name"),
-      age: get("age"),
       gender: get("gender"),
       dateOfBirth: get("date_of_birth"),
       address: get("address"),
+      state: get("state"),
       mobile: get("phone"),
       email: get("email"),
       insuranceCarrier: get("insurance_carrier"),
@@ -276,36 +352,60 @@ export function CreateCaseForm({
   function readHealthFromForm(): Record<string, unknown> {
     return {
       inboxMessage,
+      currentMedications,
       urgencyLevel: "routine",
     };
   }
 
   /**
-   * Returns an error string if the given step isn't complete, or null if it's
-   * good to advance. Mirrors the server-side completeness rules
-   * (countCompleteAbout / countCompleteHealth in src/lib/cases.ts).
-   * Step 3 (Files) has no required fields — documents are optional.
+   * Per-field validation for the About step (Step 1). Every field is mandatory.
+   * Returns a { fieldKey: message } map (empty when the step is complete) so the
+   * messages can be shown inline under each field rather than as one banner.
+   * Mirrors the server-side rules in countCompleteAbout (src/lib/cases.ts).
+   */
+  function aboutFieldErrors(): Record<string, string> {
+    const about = readAboutFromForm();
+    const str = (k: string) => String(about[k] ?? "").trim();
+    const errs: Record<string, string> = {};
+
+    if (!str("fullLegalName")) errs.fullLegalName = "Full legal name is required.";
+
+    const dob = str("dateOfBirth");
+    if (!dob) errs.dateOfBirth = "Date of birth is required.";
+    else if (ageFromDob(dob) == null) {
+      errs.dateOfBirth = "Enter a valid date of birth (age must be 0–120).";
+    }
+
+    if (!str("gender")) errs.gender = "Gender is required.";
+
+    const state = str("state");
+    if (!state) errs.state = "State is required.";
+
+    if (!str("address")) errs.address = "Patient address is required.";
+
+    const mobile = str("mobile");
+    if (!mobile) errs.mobile = "Mobile or home phone is required.";
+    else if (!isValidUsPhone(mobile)) errs.mobile = "Enter a valid US phone number.";
+    else if (state && phoneStateMismatch(mobile, state)) {
+      errs.mobile = `This area code isn't in ${usStateName(state)} — use a ${usStateName(
+        state
+      )} number or change the state.`;
+    }
+
+    const email = str("email");
+    if (!email) errs.email = "Email is required.";
+    else if (!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email)) {
+      errs.email = "Enter a valid email address.";
+    }
+
+    return errs;
+  }
+
+  /**
+   * Validation for Steps 2 and 3 (Step 1 uses aboutFieldErrors). Returns an
+   * error string or null. Step 3 (Files) has no required fields.
    */
   function validateStep(step: StepNumber): string | null {
-    if (step === 1) {
-      const about = readAboutFromForm();
-      const str = (k: string) => String(about[k] ?? "").trim();
-      const missing: string[] = [];
-      if (!str("fullLegalName")) missing.push("Full legal name");
-      const ageNum = Number(str("age"));
-      if (!str("age") || !Number.isFinite(ageNum) || ageNum < 0 || ageNum > 120) {
-        missing.push("Age (0–120)");
-      }
-      if (!str("gender")) missing.push("Gender");
-      if (!str("mobile")) missing.push("Mobile or home phone");
-      const email = str("email");
-      if (!email || !/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email)) {
-        missing.push("Email");
-      }
-      return missing.length
-        ? `Complete the About section before continuing: ${missing.join(", ")}.`
-        : null;
-    }
     if (step === 2) {
       if (!inboxMessage.trim()) {
         return "Add your Health inbox message before continuing.";
@@ -379,18 +479,41 @@ export function CreateCaseForm({
   // mounted) so moving back and forth preserves everything. Persistence
   // happens only on "Save draft" or the step-3 "Submit case" button.
   const handleNext = () => {
-    setSavedNotice("");
-    const error = validateStep(currentStep);
-    if (error) {
-      setServerError(error);
-      return;
+    if (currentStep === 1) {
+      const errs = aboutFieldErrors();
+      if (Object.keys(errs).length) {
+        setFieldErrors(errs);
+        setServerError("");
+        return;
+      }
+    } else {
+      const error = validateStep(currentStep);
+      if (error) {
+        setServerError(error);
+        return;
+      }
     }
     setServerError("");
+    setFieldErrors({});
     if (currentStep < STEPS.length) {
       const next = (currentStep + 1) as StepNumber;
       setMaxStep((m) => (next > m ? next : m));
       goToStep(next);
     }
+  };
+
+  // Clears a field's inline error as soon as the user edits it. Attached at the
+  // form level so a single handler covers every Step 1 input/select.
+  const handleFormChange = (event: React.ChangeEvent<HTMLFormElement>) => {
+    const name = event.target.name;
+    const key = ABOUT_FIELD_ERROR_KEYS[name];
+    if (!key) return;
+    setFieldErrors((prev) => {
+      if (!prev[key]) return prev;
+      const next = { ...prev };
+      delete next[key];
+      return next;
+    });
   };
 
   // Previous is always allowed (reviewing/editing an earlier part).
@@ -462,39 +585,32 @@ export function CreateCaseForm({
     await uploadPendingFiles(id);
   }
 
-  // Save draft saves ONLY the current part. It does not advance, does not
-  // navigate away, and does not require the part to be complete — the user
-  // stays on this step and continues with the Next button when ready. The
-  // case is created (if needed) and kept in `draft` status.
+  // Save draft persists the WHOLE form — every step's entered values, not just
+  // the step the user happens to be on. "Next" intentionally doesn't write to
+  // Firebase, so saving only the current step would silently drop anything typed
+  // on an earlier step. Reading from the always-mounted panels captures it all
+  // at once. The whole About-you section must be valid first: we won't create a
+  // case or write empty/invalid demographic values — instead we surface the
+  // inline field errors and stay put.
   const handleSaveDraft = async () => {
     if (saving) return;
+    const aboutErrs = aboutFieldErrors();
+    if (Object.keys(aboutErrs).length) {
+      setFieldErrors(aboutErrs);
+      setServerError("");
+      if (currentStep !== 1) goToStep(1);
+      return;
+    }
+    setFieldErrors({});
     setSaving(true);
     setServerError("");
-    setSavedNotice("");
     try {
       const id = await ensureCaseId();
-      if (currentStep === 1) {
-        await uploadInsuranceCards(id);
-        const res = await callJson("/api/cases/" + id + "/about", {
-          method: "PATCH",
-          body: JSON.stringify(readAboutFromForm()),
-        });
-        if (!res.ok) {
-          throw new Error(errorFrom(res.data, "Could not save the About details."));
-        }
-      } else if (currentStep === 2) {
-        const res = await callJson("/api/cases/" + id + "/health", {
-          method: "PATCH",
-          body: JSON.stringify(readHealthFromForm()),
-        });
-        if (!res.ok) {
-          throw new Error(errorFrom(res.data, "Could not save the Health details."));
-        }
-      } else {
-        await uploadPendingFiles(id);
-      }
-      setSavedNotice(
-        `${STEPS[currentStep - 1].label} draft saved. Use Next to continue when you're ready.`
+      await persistAll(id);
+      showToast(
+        initialCase
+          ? "Case draft updated — your changes are saved."
+          : "Draft saved — your progress is stored."
       );
     } catch (err) {
       setServerError(err instanceof Error ? err.message : "Save failed.");
@@ -505,7 +621,6 @@ export function CreateCaseForm({
 
   const handleFinalSubmit = async () => {
     if (saving) return;
-    setSavedNotice("");
     if (currentStep !== STEPS.length) {
       // Defensive: only the last step submits. Anything else just advances.
       handleNext();
@@ -513,9 +628,10 @@ export function CreateCaseForm({
     }
     // The case is only "created" (submitted) once EVERY part is complete.
     // Files (step 3) are optional, so just re-check About + Health here.
-    const aboutError = validateStep(1);
-    if (aboutError) {
-      setServerError(aboutError);
+    const aboutErrs = aboutFieldErrors();
+    if (Object.keys(aboutErrs).length) {
+      setFieldErrors(aboutErrs);
+      setServerError("");
       goToStep(1);
       return;
     }
@@ -540,7 +656,8 @@ export function CreateCaseForm({
       fetch("/api/cases/" + id + "/ai-summary", { method: "POST" }).catch(() => {
         // best-effort — the report modal also has a Regenerate button
       });
-      router.push("/cases");
+      // Hand the toast off to the Cases page so it shows once we land there.
+      router.push(`/cases?notice=${initialCase ? "updated" : "created"}`);
       router.refresh();
     } catch (err) {
       setServerError(err instanceof Error ? err.message : "Submit failed.");
@@ -557,9 +674,54 @@ export function CreateCaseForm({
 
   // Just hold picked files in memory with status "pending". They're uploaded
   // later, in one pass, by Save draft / Submit (uploadPendingFiles).
-  const addFiles = (fileList: FileList | null) => {
+  const addFiles = async (fileList: FileList | null, section: DocSection) => {
     if (!fileList || fileList.length === 0) return;
-    const entries: UploadedFile[] = Array.from(fileList).map((file) => ({
+    const picked = Array.from(fileList);
+    // Drag-and-drop bypasses the input's `accept`, so enforce the format here
+    // too — only JPG, PNG and PDF are supported.
+    const wrongType = picked.filter((file) => !isAcceptedDocType(file));
+    const rightType = picked.filter(isAcceptedDocType);
+
+    // One message per rejected file so a multi-file upload shows them all.
+    const messages: string[] = [];
+    for (const file of wrongType) {
+      messages.push(
+        `Unsupported file type: ${file.name}. Supported formats: ${ACCEPTED_DOC_LABEL}.`
+      );
+    }
+
+    // Size is checked against the post-compression bytes (images are shrunk
+    // before upload), so a large photo that compresses under the limit is kept.
+    const accepted: File[] = [];
+    for (const file of rightType) {
+      let prepared = file;
+      try {
+        prepared = await compressImage(file);
+      } catch {
+        prepared = file;
+      }
+      if (prepared.size > MAX_UPLOAD_BYTES) {
+        messages.push(
+          `File too large (max 5 MB): ${file.name} (${formatBytes(prepared.size)}).`
+        );
+      } else {
+        accepted.push(file);
+      }
+    }
+
+    // Route errors to the widget that was used. When some files were accepted,
+    // that widget's earlier errors are stale — show just this batch's;
+    // otherwise keep accumulating across sequential attempts.
+    setDocErrors((prev) => ({
+      ...prev,
+      [section]:
+        accepted.length > 0
+          ? messages
+          : Array.from(new Set([...prev[section], ...messages])),
+    }));
+
+    if (accepted.length === 0) return;
+    const entries: UploadedFile[] = accepted.map((file) => ({
       id: `${file.name}-${file.lastModified}-${Math.random().toString(36).slice(2, 7)}`,
       file,
       name: file.name,
@@ -576,7 +738,7 @@ export function CreateCaseForm({
   const handleDrop = (event: DragEvent<HTMLDivElement>) => {
     event.preventDefault();
     setIsDragOver(false);
-    addFiles(event.dataTransfer?.files ?? null);
+    addFiles(event.dataTransfer?.files ?? null, "primary");
   };
 
   const handleDragEvent = (event: DragEvent<HTMLDivElement>, over: boolean) => {
@@ -915,6 +1077,7 @@ export function CreateCaseForm({
         method="post"
         noValidate
         onSubmit={handleFormSubmit}
+        onChange={handleFormChange}
       >
         <Step1Panel
           active={currentStep === 1}
@@ -922,11 +1085,16 @@ export function CreateCaseForm({
           onInsuranceChange={handleInsuranceChange}
           defaults={aboutDefaults}
           existingInsurance={existingInsurance}
+          computedAge={computedAge}
+          onDobChange={(value) => setComputedAge(ageFromDob(value))}
+          errors={fieldErrors}
         />
         <Step2Panel
           active={currentStep === 2}
           inboxMessage={inboxMessage}
           onInboxChange={setInboxMessage}
+          currentMedications={currentMedications}
+          onCurrentMedicationsChange={setCurrentMedications}
           speechStatus={speechStatus}
           speechSupported={speechSupported}
           isListening={isListening}
@@ -936,12 +1104,13 @@ export function CreateCaseForm({
           active={currentStep === 3}
           files={files}
           isDragOver={isDragOver}
+          errors={docErrors}
           onDrop={handleDrop}
           onDragOver={(e) => handleDragEvent(e, true)}
           onDragEnter={(e) => handleDragEvent(e, true)}
           onDragLeave={(e) => handleDragEvent(e, false)}
           onFileTrigger={handleFileTrigger}
-          onFilesPicked={(list) => addFiles(list)}
+          onFilesPicked={(list, section) => addFiles(list, section)}
           onRemoveFile={handleRemoveFile}
           fileInputRef={fileInputRef}
         />
@@ -957,20 +1126,6 @@ export function CreateCaseForm({
             }}
           >
             {serverError}
-          </p>
-        ) : null}
-
-        {savedNotice && !serverError ? (
-          <p
-            role="status"
-            style={{
-              color: "#15803d",
-              margin: "12px 0 0",
-              fontSize: 14,
-              fontWeight: 500,
-            }}
-          >
-            {savedNotice}
           </p>
         ) : null}
 
@@ -995,14 +1150,18 @@ export function CreateCaseForm({
             </button>
           </div>
           <div className="cc-step1-actions__right">
-            <button
-              type="button"
-              className="cc-btn cc-btn--outline"
-              onClick={handleSaveDraft}
-              disabled={saving}
-            >
-              {saving ? "Saving…" : "Save draft"}
-            </button>
+            {/* "Save draft" is for the earlier steps. On the final File step the
+                workflow is to submit, so it's hidden there. */}
+            {!isLast ? (
+              <button
+                type="button"
+                className="cc-btn cc-btn--outline"
+                onClick={handleSaveDraft}
+                disabled={saving}
+              >
+                {saving ? "Saving…" : "Save draft"}
+              </button>
+            ) : null}
             <button
               type="button"
               className="cc-btn cc-btn--primary"
@@ -1014,16 +1173,28 @@ export function CreateCaseForm({
           </div>
         </div>
       </form>
+
+      <div
+        className={`cc-toast${
+          toast.state === "show" || toast.state === "leave" ? " cc-toast--show" : ""
+        }${toast.state === "leave" ? " cc-toast--leave" : ""}`}
+        role="status"
+        aria-live="polite"
+        aria-atomic="true"
+        aria-hidden={toast.state === "hidden"}
+      >
+        <p className="cc-toast__text">{toast.message}</p>
+      </div>
     </main>
   );
 }
 
 type Step1AboutDefaults = {
   fullLegalName: string;
-  age: string;
   gender: string;
   dateOfBirth: string;
   address: string;
+  state: string;
   mobile: string;
   email: string;
   insuranceCarrier: string;
@@ -1038,6 +1209,9 @@ type Step1PanelProps = {
   onInsuranceChange: (side: "front" | "back", file: File | null) => void;
   defaults: Step1AboutDefaults | null;
   existingInsurance: { front: string | null; back: string | null };
+  computedAge: number | null;
+  onDobChange: (value: string) => void;
+  errors: Record<string, string>;
 };
 
 function Step1Panel({
@@ -1046,8 +1220,17 @@ function Step1Panel({
   onInsuranceChange,
   defaults,
   existingInsurance,
+  computedAge,
+  onDobChange,
+  errors,
 }: Step1PanelProps) {
   const d = (k: keyof Step1AboutDefaults) => defaults?.[k] ?? "";
+  const fieldError = (key: string) =>
+    errors[key] ? (
+      <span className="cc-field-error" role="alert">
+        {errors[key]}
+      </span>
+    ) : null;
   return (
     <div
       className={`cc-panel cc-panel--step1${active ? " is-active" : ""}`}
@@ -1101,20 +1284,7 @@ function Step1Panel({
                     required
                     defaultValue={d("fullLegalName")}
                   />
-                </div>
-                <div className="cc-field">
-                  <label htmlFor="cc-age">Age</label>
-                  <input
-                    className="cc-input"
-                    id="cc-age"
-                    name="age"
-                    type="number"
-                    min={0}
-                    max={120}
-                    inputMode="numeric"
-                    placeholder="Years"
-                    defaultValue={d("age")}
-                  />
+                  {fieldError("fullLegalName")}
                 </div>
                 <div className="cc-field">
                   <label htmlFor="cc-gender">Gender</label>
@@ -1123,6 +1293,7 @@ function Step1Panel({
                     id="cc-gender"
                     name="gender"
                     autoComplete="sex"
+                    required
                     defaultValue={d("gender")}
                   >
                     <option value="">Select…</option>
@@ -1132,6 +1303,7 @@ function Step1Panel({
                     <option value="prefer_not_to_say">Prefer not to say</option>
                     <option value="other">Other / specify in notes</option>
                   </select>
+                  {fieldError("gender")}
                 </div>
                 <div className="cc-field">
                   <label htmlFor="cc-dob">Date of birth</label>
@@ -1141,8 +1313,36 @@ function Step1Panel({
                     name="date_of_birth"
                     type="date"
                     autoComplete="bday"
+                    required
+                    max={new Date().toISOString().slice(0, 10)}
                     defaultValue={d("dateOfBirth")}
+                    onChange={(e) => onDobChange(e.currentTarget.value)}
                   />
+                  <span className="cc-field-hint">
+                    {computedAge != null
+                      ? `Age: ${computedAge} ${computedAge === 1 ? "year" : "years"}`
+                      : "Age is calculated from the date of birth."}
+                  </span>
+                  {fieldError("dateOfBirth")}
+                </div>
+                <div className="cc-field">
+                  <label htmlFor="cc-state">State</label>
+                  <select
+                    className="cc-select"
+                    id="cc-state"
+                    name="state"
+                    autoComplete="address-level1"
+                    required
+                    defaultValue={d("state")}
+                  >
+                    <option value="">Select…</option>
+                    {US_STATES.map((s) => (
+                      <option key={s.code} value={s.code}>
+                        {s.name}
+                      </option>
+                    ))}
+                  </select>
+                  {fieldError("state")}
                 </div>
                 <div className="cc-field cc-step1-field-full">
                   <label htmlFor="cc-address">Patient address</label>
@@ -1153,8 +1353,10 @@ function Step1Panel({
                     type="text"
                     autoComplete="street-address"
                     placeholder="Street, City, State, ZIP"
+                    required
                     defaultValue={d("address")}
                   />
+                  {fieldError("address")}
                 </div>
               </div>
             </div>
@@ -1168,10 +1370,16 @@ function Step1Panel({
                     id="cc-phone"
                     name="phone"
                     type="tel"
+                    inputMode="tel"
                     autoComplete="tel"
                     placeholder="+1 (555) 000-0000"
-                    defaultValue={d("mobile")}
+                    required
+                    defaultValue={formatUsPhone(d("mobile"))}
+                    onChange={(e) => {
+                      e.currentTarget.value = formatUsPhone(e.currentTarget.value);
+                    }}
                   />
+                  {fieldError("mobile")}
                 </div>
                 <div className="cc-field">
                   <label htmlFor="cc-email">Email</label>
@@ -1183,11 +1391,13 @@ function Step1Panel({
                     autoComplete="email"
                     placeholder="you@email.com"
                     aria-describedby="cc-hint-email"
+                    required
                     defaultValue={d("email")}
                   />
                   <span className="cc-field-hint" id="cc-hint-email">
                     We&apos;ll use this to send updates about this request only.
                   </span>
+                  {fieldError("email")}
                 </div>
               </div>
             </div>
@@ -1297,6 +1507,28 @@ function InsuranceUploadTile({
   onChange,
 }: InsuranceUploadTileProps) {
   const [previewUrl, setPreviewUrl] = useState<string | null>(null);
+  const [error, setError] = useState<string | null>(null);
+
+  const handlePick = (event: React.ChangeEvent<HTMLInputElement>) => {
+    const picked = event.target.files?.[0] ?? null;
+    if (!picked) {
+      setError(null);
+      onChange(null);
+      return;
+    }
+    if (!isAcceptedDocType(picked)) {
+      setError("Unsupported file type. Upload a PNG, JPG, or PDF.");
+      event.target.value = "";
+      return;
+    }
+    if (picked.size > MAX_UPLOAD_BYTES) {
+      setError(`File is too large (${formatBytes(picked.size)}). Maximum size is 5 MB.`);
+      event.target.value = "";
+      return;
+    }
+    setError(null);
+    onChange(picked);
+  };
 
   useEffect(() => {
     if (file && file.type.startsWith("image/")) {
@@ -1313,6 +1545,7 @@ function InsuranceUploadTile({
   const fallbackUrl = !file && existingUrl ? existingUrl : null;
 
   return (
+    <>
     <label className="cc-insurance-upload" htmlFor={inputId}>
       <input
         className="cc-file-input"
@@ -1320,7 +1553,7 @@ function InsuranceUploadTile({
         name={inputName}
         type="file"
         accept=".png,.jpg,.jpeg,.pdf"
-        onChange={(e) => onChange(e.target.files?.[0] ?? null)}
+        onChange={handlePick}
       />
       {previewUrl ? (
         <>
@@ -1364,6 +1597,12 @@ function InsuranceUploadTile({
         </>
       )}
     </label>
+    {error ? (
+      <p className="cc-field-error" role="alert">
+        {error}
+      </p>
+    ) : null}
+    </>
   );
 }
 
@@ -1371,6 +1610,8 @@ type Step2PanelProps = {
   active: boolean;
   inboxMessage: string;
   onInboxChange: (value: string) => void;
+  currentMedications: string;
+  onCurrentMedicationsChange: (value: string) => void;
   speechStatus: string;
   speechSupported: boolean;
   isListening: boolean;
@@ -1381,6 +1622,8 @@ function Step2Panel({
   active,
   inboxMessage,
   onInboxChange,
+  currentMedications,
+  onCurrentMedicationsChange,
   speechStatus,
   speechSupported,
   isListening,
@@ -1503,6 +1746,19 @@ function Step2Panel({
                 {speechStatus}
               </p>
             </div>
+
+            <div className="cc-field cc-field--clinical-block">
+              <label className="cc-medical-details__section-label">
+                Current Medication
+              </label>
+              <MedicationPicker
+                value={currentMedications}
+                onChange={onCurrentMedicationsChange}
+              />
+              <p className="cc-field-hint" style={{ marginTop: 8 }}>
+                Medications reported by the patient during intake.
+              </p>
+            </div>
           </section>
         </div>
       </div>
@@ -1514,20 +1770,35 @@ type Step3PanelProps = {
   active: boolean;
   files: UploadedFile[];
   isDragOver: boolean;
+  errors: DocErrorMap;
   onDrop: (event: DragEvent<HTMLDivElement>) => void;
   onDragOver: (event: DragEvent<HTMLDivElement>) => void;
   onDragEnter: (event: DragEvent<HTMLDivElement>) => void;
   onDragLeave: (event: DragEvent<HTMLDivElement>) => void;
   onFileTrigger: () => void;
-  onFilesPicked: (list: FileList | null) => void;
+  onFilesPicked: (list: FileList | null, section: DocSection) => void;
   onRemoveFile: (id: string) => void;
   fileInputRef: React.MutableRefObject<HTMLInputElement | null>;
 };
+
+function DocErrorList({ messages }: { messages: string[] }) {
+  if (messages.length === 0) return null;
+  return (
+    <div className="cc-doc-errors" role="alert">
+      {messages.map((message, i) => (
+        <p key={`${message}-${i}`} className="cc-field-error">
+          {message}
+        </p>
+      ))}
+    </div>
+  );
+}
 
 function Step3Panel({
   active,
   files,
   isDragOver,
+  errors,
   onDrop,
   onDragOver,
   onDragEnter,
@@ -1537,6 +1808,8 @@ function Step3Panel({
   onRemoveFile,
   fileInputRef,
 }: Step3PanelProps) {
+  const labInputRef = useRef<HTMLInputElement | null>(null);
+  const otherInputRef = useRef<HTMLInputElement | null>(null);
   return (
     <div
       className={`cc-panel cc-panel--step3${active ? " is-active" : ""}`}
@@ -1566,13 +1839,8 @@ function Step3Panel({
             <div className="cc-doc-head cc-step1-card__head--ruled">
               <div className="cc-doc-head__text">
                 <h2 className="cc-step1-card__title">Documents &amp; images</h2>
-                <p className="cc-field-hint cc-doc-note">
-                  <strong>Note:</strong> Documents you upload will be analyzed by AI and shared
-                  with a GI specialist; the AI-generated summary is preliminary and should not
-                  be considered a final report.
-                </p>
               </div>
-              <span className="cc-doc-badge">Add if available</span>
+              <span className="cc-doc-badge">Optional</span>
             </div>
 
             <p className="cc-doc-tip">
@@ -1589,7 +1857,9 @@ function Step3Panel({
             </p>
 
             <div
-              className={`cc-drop cc-drop--primary${isDragOver ? " is-dragover" : ""}`}
+              className={`cc-drop cc-drop--primary${isDragOver ? " is-dragover" : ""}${
+                errors.primary.length > 0 ? " is-error" : ""
+              }`}
               onDrop={onDrop}
               onDragOver={onDragOver}
               onDragEnter={onDragEnter}
@@ -1607,17 +1877,17 @@ function Step3Panel({
                     />
                   </svg>
                 </span>
-                <strong>Drop imaging (DICOM / JPG)</strong>
-                <p>Maximum file size 5 MB per upload</p>
+                <strong>Drag &amp; drop files here</strong>
+                <p>Supported formats: {ACCEPTED_DOC_LABEL} · Max 5 MB per file</p>
               </div>
               <input
                 ref={fileInputRef}
                 type="file"
                 name="documents[]"
                 multiple
-                accept=".pdf,.png,.jpg,.jpeg,.dcm,.zip,.csv,.xlsx"
+                accept={ACCEPTED_DOC_ACCEPT}
                 className="cc-file-input"
-                onChange={(e) => onFilesPicked(e.target.files)}
+                onChange={(e) => onFilesPicked(e.target.files, "primary")}
               />
               <button
                 type="button"
@@ -1628,45 +1898,73 @@ function Step3Panel({
               </button>
             </div>
 
+            <DocErrorList messages={errors.primary} />
+
             <div className="cc-doc-secondary">
-              <button
-                type="button"
-                className="cc-drop cc-drop--compact"
-                onClick={onFileTrigger}
-              >
-                <span className="cc-drop__mini-icon" aria-hidden="true">
-                  <svg width="22" height="22" viewBox="0 0 24 24" fill="none">
-                    <circle cx="11" cy="11" r="3" stroke="currentColor" strokeWidth="1.6" />
-                    <path
-                      d="M11 8V2M11 22v-6M8 11H2M22 11h-6"
-                      stroke="currentColor"
-                      strokeWidth="1.6"
-                      strokeLinecap="round"
-                    />
-                  </svg>
-                </span>
-                <strong>Lab reports</strong>
-                <span className="cc-drop__hint">PDF, Excel, CSV</span>
-              </button>
-              <button
-                type="button"
-                className="cc-drop cc-drop--compact"
-                onClick={onFileTrigger}
-              >
-                <span className="cc-drop__mini-icon" aria-hidden="true">
-                  <svg width="22" height="22" viewBox="0 0 24 24" fill="none">
-                    <path
-                      d="M21.44 11.05l-9.19 9.19a6 6 0 01-8.49-8.49l9.19-9.19a4 4 0 015.66 5.66L9.64 16.78a2 2 0 01-2.83-2.83l8.49-8.48"
-                      stroke="currentColor"
-                      strokeWidth="1.6"
-                      strokeLinecap="round"
-                      strokeLinejoin="round"
-                    />
-                  </svg>
-                </span>
-                <strong>Other attachments</strong>
-                <span className="cc-drop__hint">Notes, previous consults</span>
-              </button>
+              <div className="cc-doc-secondary__col">
+                <button
+                  type="button"
+                  className={`cc-drop cc-drop--compact${
+                    errors.lab.length > 0 ? " is-error" : ""
+                  }`}
+                  onClick={() => labInputRef.current?.click()}
+                >
+                  <span className="cc-drop__mini-icon" aria-hidden="true">
+                    <svg width="22" height="22" viewBox="0 0 24 24" fill="none">
+                      <circle cx="11" cy="11" r="3" stroke="currentColor" strokeWidth="1.6" />
+                      <path
+                        d="M11 8V2M11 22v-6M8 11H2M22 11h-6"
+                        stroke="currentColor"
+                        strokeWidth="1.6"
+                        strokeLinecap="round"
+                      />
+                    </svg>
+                  </span>
+                  <strong>Lab reports</strong>
+                  <span className="cc-drop__hint">{ACCEPTED_DOC_LABEL}</span>
+                </button>
+                <input
+                  ref={labInputRef}
+                  type="file"
+                  multiple
+                  accept={ACCEPTED_DOC_ACCEPT}
+                  className="cc-file-input"
+                  onChange={(e) => onFilesPicked(e.target.files, "lab")}
+                />
+                <DocErrorList messages={errors.lab} />
+              </div>
+              <div className="cc-doc-secondary__col">
+                <button
+                  type="button"
+                  className={`cc-drop cc-drop--compact${
+                    errors.other.length > 0 ? " is-error" : ""
+                  }`}
+                  onClick={() => otherInputRef.current?.click()}
+                >
+                  <span className="cc-drop__mini-icon" aria-hidden="true">
+                    <svg width="22" height="22" viewBox="0 0 24 24" fill="none">
+                      <path
+                        d="M21.44 11.05l-9.19 9.19a6 6 0 01-8.49-8.49l9.19-9.19a4 4 0 015.66 5.66L9.64 16.78a2 2 0 01-2.83-2.83l8.49-8.48"
+                        stroke="currentColor"
+                        strokeWidth="1.6"
+                        strokeLinecap="round"
+                        strokeLinejoin="round"
+                      />
+                    </svg>
+                  </span>
+                  <strong>Other attachments</strong>
+                  <span className="cc-drop__hint">Notes, previous consults</span>
+                </button>
+                <input
+                  ref={otherInputRef}
+                  type="file"
+                  multiple
+                  accept={ACCEPTED_DOC_ACCEPT}
+                  className="cc-file-input"
+                  onChange={(e) => onFilesPicked(e.target.files, "other")}
+                />
+                <DocErrorList messages={errors.other} />
+              </div>
             </div>
 
             <p className="cc-file-list__title" id="cc-file-list-label">

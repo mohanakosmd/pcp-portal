@@ -68,8 +68,8 @@ firebase apphosting:secrets:set GEMINI_API_KEY
 If the CLI offers to add these to `apphosting.yaml`, you can skip it — they're
 already declared there.
 
-> The non-secret values (public `NEXT_PUBLIC_FIREBASE_*`, `SENDGRID_SENDER_EMAIL`,
-> `SIGNUP_OTP_RECIPIENT`) are already in `apphosting.yaml` in plaintext, which is fine
+> The non-secret values (public `NEXT_PUBLIC_FIREBASE_*`, `SENDGRID_SENDER_EMAIL`)
+> are already in `apphosting.yaml` in plaintext, which is fine
 > — the Firebase web config is public by design.
 
 ## 5. Deploy

@@ -46,7 +46,7 @@ export default function AuthLayout({
             </div>
             <div className="auth-security__text">
               <span>SECURITY STANDARD</span>
-              <strong>HIPAA Compliant &amp; Encrypted</strong>
+              <strong>HIPAA Compliant &amp; Security</strong>
             </div>
           </div>
         </div>

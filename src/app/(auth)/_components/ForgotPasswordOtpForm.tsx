@@ -4,13 +4,24 @@ import { useRouter } from "next/navigation";
 import { useEffect, useRef, useState } from "react";
 
 const OTP_LENGTH = 6;
+// Visible countdown / resend cooldown. The code itself stays valid for the
+// server window (OTP_TTL_SECONDS = 5 min); this 1-minute timer only gates when
+// the "Resend" link appears. Server rejects a genuinely expired code.
 const INITIAL_SECONDS = 60;
+
+function formatRemaining(seconds: number): string {
+  const m = Math.floor(seconds / 60);
+  const s = seconds % 60;
+  return `${m}:${String(s).padStart(2, "0")} Remaining`;
+}
 
 export function ForgotPasswordOtpForm({ email }: { email: string }) {
   const router = useRouter();
-  const [digits, setDigits] = useState<string[]>(() => ["1", "2", "3", "4", "5", "6"]);
+  const [digits, setDigits] = useState<string[]>(() => Array(OTP_LENGTH).fill(""));
   const [secondsLeft, setSecondsLeft] = useState(INITIAL_SECONDS);
   const [toastState, setToastState] = useState<"hidden" | "show" | "leave">("hidden");
+  const [submitting, setSubmitting] = useState(false);
+  const [error, setError] = useState("");
   const inputsRef = useRef<Array<HTMLInputElement | null>>([]);
   const hideTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const resetTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
@@ -66,22 +77,81 @@ export function ForgotPasswordOtpForm({ email }: { email: string }) {
     }
   };
 
-  const handleVerify = (event: React.FormEvent<HTMLFormElement>) => {
+  const handleVerify = async (event: React.FormEvent<HTMLFormElement>) => {
     event.preventDefault();
-    router.push("/reset-password");
+    if (submitting) return;
+    const code = digits.join("");
+    if (code.length !== OTP_LENGTH) {
+      setError("Enter the full 6-digit code.");
+      inputsRef.current[digits.findIndex((d) => !d) || 0]?.focus();
+      return;
+    }
+    setSubmitting(true);
+    setError("");
+    try {
+      const response = await fetch("/api/auth/forgot-password/verify", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ code }),
+      });
+      let data: { error?: string } = {};
+      try {
+        data = (await response.json()) as { error?: string };
+      } catch {
+        // ignore
+      }
+      if (!response.ok) {
+        setError(data.error || "Verification failed.");
+        return;
+      }
+      router.push("/reset-password");
+    } catch {
+      setError("Network error. Please try again.");
+    } finally {
+      setSubmitting(false);
+    }
   };
 
-  const handleResend = (event: React.MouseEvent<HTMLAnchorElement>) => {
+  const handleResend = async (event: React.MouseEvent<HTMLAnchorElement>) => {
     event.preventDefault();
-    setSecondsLeft(INITIAL_SECONDS);
-    if (hideTimerRef.current) clearTimeout(hideTimerRef.current);
-    if (resetTimerRef.current) clearTimeout(resetTimerRef.current);
-    setToastState("show");
-    hideTimerRef.current = setTimeout(() => setToastState("leave"), 4000);
-    resetTimerRef.current = setTimeout(() => setToastState("hidden"), 4500);
+    if (submitting || !email) {
+      if (!email) setError("Start again from Forgot password to resend the code.");
+      return;
+    }
+    setSubmitting(true);
+    setError("");
+    try {
+      const response = await fetch("/api/auth/forgot-password", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ email }),
+      });
+      let data: { error?: string } = {};
+      try {
+        data = (await response.json()) as { error?: string };
+      } catch {
+        // ignore
+      }
+      if (!response.ok) {
+        setError(data.error || "Could not resend the code.");
+        return;
+      }
+      setDigits(Array(OTP_LENGTH).fill(""));
+      setSecondsLeft(INITIAL_SECONDS);
+      if (hideTimerRef.current) clearTimeout(hideTimerRef.current);
+      if (resetTimerRef.current) clearTimeout(resetTimerRef.current);
+      setToastState("show");
+      hideTimerRef.current = setTimeout(() => setToastState("leave"), 4000);
+      resetTimerRef.current = setTimeout(() => setToastState("hidden"), 4500);
+      inputsRef.current[0]?.focus();
+    } catch {
+      setError("Network error. Please try again.");
+    } finally {
+      setSubmitting(false);
+    }
   };
 
-  const timerText = secondsLeft > 0 ? `${secondsLeft} Sec Remaining` : "OTP expired";
+  const canResend = secondsLeft <= 0;
 
   const toastClassName = [
     "otp-toast",
@@ -121,13 +191,34 @@ export function ForgotPasswordOtpForm({ email }: { email: string }) {
 
           <p className="otp-instruction">
             Enter the code sent to your registered Email ID.{" "}
-            <span className="otp-email">{email}</span>
+            <span className="otp-email">{email || "your registered email"}</span>
           </p>
-          <p className="otp-timer">{timerText}</p>
+          {secondsLeft > 0 ? (
+            <p className="otp-timer">{formatRemaining(secondsLeft)}</p>
+          ) : null}
+          {error ? (
+            <p
+              className="section-hint section-hint--left"
+              role="alert"
+              style={{ color: "#b91c1c", margin: 0 }}
+            >
+              {error}
+            </p>
+          ) : null}
+          {canResend ? (
+            <a className="resend-link" href="#" onClick={handleResend}>
+              Didn&apos;t receive the code?
+            </a>
+          ) : null}
         </div>
 
-        <button className="action-btn" type="submit" aria-label="Verify and reset password">
-          <span>Verify</span>
+        <button
+          className="action-btn"
+          type="submit"
+          aria-label="Verify and reset password"
+          disabled={submitting}
+        >
+          <span>{submitting ? "Verifying…" : "Verify"}</span>
           <svg width="14" height="14" viewBox="0 0 14 14" fill="none" aria-hidden="true">
             <path
               d="M2.33334 7H11.6667M11.6667 7L7.00001 2.33333M11.6667 7L7.00001 11.6667"
@@ -138,10 +229,6 @@ export function ForgotPasswordOtpForm({ email }: { email: string }) {
             />
           </svg>
         </button>
-
-        <a className="resend-link" href="#" onClick={handleResend}>
-          Didn&apos;t receive the code?
-        </a>
       </form>
 
       <div
@@ -152,7 +239,7 @@ export function ForgotPasswordOtpForm({ email }: { email: string }) {
         aria-hidden={toastState === "hidden"}
       >
         <p className="otp-toast__text">
-          We&apos;ve sent a new OTP to {email} and your registered mobile number.
+          We&apos;ve sent a new OTP to {email || "your registered email"}.
         </p>
       </div>
     </>

@@ -1,6 +1,7 @@
 import { NextResponse } from "next/server";
 
 import { readSessionUserId } from "@/lib/auth";
+import { syncGiNotificationsFor } from "@/lib/gi-notification-sync";
 import { countUnreadFor, listNotificationsFor } from "@/lib/notifications";
 
 export const runtime = "nodejs";
@@ -15,6 +16,14 @@ export async function GET(request: Request) {
   const limit = Math.min(Number(url.searchParams.get("limit")) || 20, 100);
 
   try {
+    // Reconcile GI-portal events (final reports, GI remarks) into this PCP's
+    // feed before reading it. Best-effort: never fail the fetch over a sync error.
+    try {
+      await syncGiNotificationsFor(userId);
+    } catch (err) {
+      console.error("[notifications GET] GI sync failed:", err);
+    }
+
     const [notifications, unreadCount] = await Promise.all([
       listNotificationsFor(userId, { limit, unreadOnly }),
       countUnreadFor(userId),

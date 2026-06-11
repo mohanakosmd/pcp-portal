@@ -3,6 +3,7 @@ import { NextResponse } from "next/server";
 import { readSessionUserId } from "@/lib/auth";
 import { PCP_USERS_COLLECTION } from "@/lib/firebase";
 import { getDocument } from "@/lib/firestore-rest";
+import { emitReportRemarkAdded } from "@/lib/notification-events";
 import {
   addReportComment,
   assertReportAccessibleBy,
@@ -47,7 +48,8 @@ export async function POST(
     const body = (await request.json().catch(() => ({}))) as { body?: unknown };
     const text = typeof body.body === "string" ? body.body : "";
 
-    const { caseId } = await assertReportAccessibleBy(reportId, userId);
+    const { caseId, caseShortCode, giUserId, reportName } =
+      await assertReportAccessibleBy(reportId, userId);
 
     const userDoc = await getDocument(PCP_USERS_COLLECTION, userId);
     const authorName =
@@ -62,6 +64,22 @@ export async function POST(
       authorName,
       body: text,
     });
+
+    // Notify the GI specialist the report is shared with (in-app + email).
+    // Best-effort: a notification failure must not fail the remark submission.
+    try {
+      await emitReportRemarkAdded({
+        caseId,
+        caseShortCode,
+        reportName,
+        giUserId,
+        pcpName: authorName,
+        remarkBody: comment.body,
+      });
+    } catch (err) {
+      console.error("[report comments POST] GI notify failed:", err);
+    }
+
     return NextResponse.json({ ok: true, comment });
   } catch (err) {
     // eslint-disable-next-line @typescript-eslint/no-explicit-any

@@ -1,6 +1,5 @@
 // Quick check that SendGrid credentials in .env.local can actually deliver
-// an email. Sends a one-off test message to SIGNUP_OTP_RECIPIENT (or
-// SENDGRID_FORCE_TO if set).
+// an email. Sends a one-off test message to SENDGRID_FORCE_TO.
 //
 // Run from project root: node scripts/check-sendgrid.mjs
 
@@ -9,15 +8,14 @@ config({ path: ".env.local" });
 
 const API_KEY = process.env.SENDGRID_API_KEY?.trim();
 const SENDER = process.env.SENDGRID_SENDER_EMAIL?.trim();
-const FORCE_TO = process.env.SENDGRID_FORCE_TO?.trim();
-const RECIPIENT = FORCE_TO || process.env.SIGNUP_OTP_RECIPIENT?.trim();
+const RECIPIENT = process.env.SENDGRID_FORCE_TO?.trim();
 
 if (!API_KEY || !SENDER) {
   console.error("Missing SENDGRID_API_KEY or SENDGRID_SENDER_EMAIL in .env.local");
   process.exit(1);
 }
 if (!RECIPIENT) {
-  console.error("No recipient — set SIGNUP_OTP_RECIPIENT or SENDGRID_FORCE_TO in .env.local");
+  console.error("No recipient — set SENDGRID_FORCE_TO in .env.local");
   process.exit(1);
 }
 

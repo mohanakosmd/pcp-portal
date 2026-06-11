@@ -1,10 +1,19 @@
-// Migration 004 — initialize notifications collection.
+// Migration 006 — initialize pcp_signup_otps collection.
 //
-// Writes a `_schema` doc into `notifications` documenting the per-user
-// notification feed used for in-app bell + dropdown. Idempotent.
+// PCP-only staging area for in-flight create-account attempts. When a visitor
+// requests access, the submitted details + a 6-digit OTP are written here
+// (keyed by emailKey) instead of straight into signup_requests. Only once the
+// OTP is verified do we materialize the record into signup_requests (status
+// "pending", emailVerified=true) and delete the staged doc. This keeps
+// unverified attempts out of the shared admin review queue.
+//
+// Documents are short-lived: created on signup, deleted on successful verify.
+// The external admin portal does NOT read this collection.
+//
+// Writes a `_schema` doc documenting the contract. Idempotent.
 //
 // Run from project root:
-//   node scripts/migrations/004-init-notifications.mjs
+//   node scripts/migrations/006-init-pcp-signup-otps.mjs
 
 import { config } from "dotenv";
 config({ path: ".env.local" });
@@ -18,8 +27,8 @@ if (!PROJECT_ID || !API_KEY) {
 
 const BASE = `https://firestore.googleapis.com/v1/projects/${PROJECT_ID}/databases/(default)/documents`;
 
-const MIGRATION_ID = "004-init-notifications";
-const NOTIFICATIONS = "notifications";
+const MIGRATION_ID = "006-init-pcp-signup-otps";
+const PCP_SIGNUP_OTPS = "pcp_signup_otps";
 const MIGRATIONS = "pcp_migrations";
 
 function enc(v) {
@@ -66,25 +75,24 @@ async function upsertDoc(collection, id, data) {
 async function main() {
   console.log(`Migration ${MIGRATION_ID} — project ${PROJECT_ID}`);
 
-  await upsertDoc(NOTIFICATIONS, "_schema", {
+  await upsertDoc(PCP_SIGNUP_OTPS, "_schema", {
     schemaVersion: 1,
     migration: MIGRATION_ID,
     description:
-      "In-app notification feed. One doc per event per recipient. Queried " +
-      "by recipientUserId + createdAt DESC for the bell dropdown.",
+      "PCP-only staging area for in-flight create-account attempts. Doc id is " +
+      "emailKey (email lowercased, non-alphanumerics → '_'). Holds the " +
+      "submitted details and a pending OTP until the email is verified; on a " +
+      "correct code the route writes a record into signup_requests and deletes " +
+      "this doc. Short-lived; the external admin portal does not read it.",
     fields: {
-      recipientUserId: "string — pcp_users or gi_users doc id",
-      recipientType: "string — 'pcp' | 'gi'",
-      type:
-        "string — 'case_created' | 'case_submitted' | 'case_shared' | " +
-        "'report_shared' | 'report_remark'",
-      caseId: "string — pcp_cases doc id",
-      caseShortCode: "string — e.g. 'REQ-12345' (denormalized for display)",
-      title: "string — short heading",
-      body: "string — one-line summary",
-      read: "boolean — false until user marks it read",
+      fullName: "string — display name as submitted",
+      email: "string — normalized lowercase",
+      phone: "string — phone number, free format",
+      otpCode: "string — 6-digit pending code",
+      otpExpiresAt: "ISO timestamp — when the code expires",
+      otpAttempts: "integer — wrong-code attempts so far",
       createdAt: "ISO timestamp",
-      readAt: "ISO timestamp | null",
+      updatedAt: "ISO timestamp",
     },
     appliedAt: new Date().toISOString(),
   });
@@ -93,7 +101,7 @@ async function main() {
     appliedAt: new Date().toISOString(),
   });
 
-  console.log(`Done. Schema written to ${NOTIFICATIONS}/_schema`);
+  console.log(`Done. Schema written to ${PCP_SIGNUP_OTPS}/_schema`);
 }
 
 main().catch((err) => {

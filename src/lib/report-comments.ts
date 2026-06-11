@@ -46,14 +46,24 @@ function generateId(): string {
   return (prefix + suffix).slice(0, 20);
 }
 
+export type ReportAccess = {
+  caseId: string;
+  caseShortCode: string;
+  /** GI specialist the report is shared with (gi_users doc id), if any. */
+  giUserId: string;
+  reportName: string;
+};
+
 /**
  * Confirms the report exists and its case is owned by `userId`. Returns the
- * report's `case_id`. Throws an error carrying a `.status` for the API route.
+ * report's `case_id` plus the case short code and the GI specialist it's shared
+ * with (used to notify them). Throws an error carrying a `.status` for the API
+ * route.
  */
 export async function assertReportAccessibleBy(
   reportId: string,
   userId: string
-): Promise<{ caseId: string }> {
+): Promise<ReportAccess> {
   const report = await getDocument(GI_SHARED_REPORTS_COLLECTION, reportId);
   if (!report) {
     const err = new Error("Report not found.");
@@ -75,9 +85,19 @@ export async function assertReportAccessibleBy(
     (err as any).status = 403;
     throw err;
   }
-  return { caseId };
+  const caseShortCode =
+    typeof caseDoc.data.shortCode === "string" ? caseDoc.data.shortCode : caseId;
+  const giUserId =
+    typeof report.data.gi_specialist_id === "string" ? report.data.gi_specialist_id : "";
+  const reportName =
+    typeof report.data.report_name === "string" ? report.data.report_name : "";
+  return { caseId, caseShortCode, giUserId, reportName };
 }
 
+// Both writers — this PCP portal (addReportComment below) and the external GI
+// portal — store comments in this subcollection with the same camelCase shape
+// (authorName, authorRole "pcp"|"gi", body, createdAt), so a single reader
+// surfaces the whole thread. The report view tags each by authorRole.
 export async function listReportComments(reportId: string): Promise<ReportComment[]> {
   const page = await listDocuments(commentsPath(reportId), { pageSize: 200 });
   return page.docs

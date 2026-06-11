@@ -2,10 +2,12 @@
 
 import Link from "next/link";
 import { useRouter } from "next/navigation";
-import { useEffect, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 
+import { ageFromDob } from "@/lib/age";
 import type { CaseListItem, CaseListPillVariant } from "@/lib/cases";
 import type { GiUser } from "@/lib/gi-users";
+import { formatUsPhone, isValidUsPhone } from "@/lib/phone";
 
 const STORAGE_KEY = "pcp-cases-saved-collapsed";
 
@@ -27,31 +29,43 @@ type CaseDocument = {
   url: string;
 };
 
-export function CasesView({ cases }: { cases: CaseListItem[] }) {
+export function CasesView({
+  cases,
+  notice = null,
+  focusId = null,
+  initialFilter = null,
+}: {
+  cases: CaseListItem[];
+  notice?: string | null;
+  focusId?: string | null;
+  initialFilter?: string | null;
+}) {
   const router = useRouter();
   const [selectedId, setSelectedId] = useState<string>(cases[0]?.id ?? "");
+  const [filterText, setFilterText] = useState<string>(initialFilter?.trim() ?? "");
   const [savedCollapsed, setSavedCollapsed] = useState(false);
   const [shareOpen, setShareOpen] = useState(false);
   const [shareSelected, setShareSelected] = useState<string>("");
   const [shareError, setShareError] = useState(false);
   const [shareSubmitting, setShareSubmitting] = useState(false);
   const [shareErrorMessage, setShareErrorMessage] = useState<string>("");
+  // Transient toast (e.g. "already shared with GI").
+  const [toast, setToast] = useState<{
+    message: string;
+    state: "show" | "leave" | "hidden";
+  }>({ message: "", state: "hidden" });
+  const toastHideTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const toastResetTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
   const [giUsers, setGiUsers] = useState<GiUser[]>([]);
   const [giUsersLoading, setGiUsersLoading] = useState(false);
   const [giUsersError, setGiUsersError] = useState<string>("");
   const [reportOpen, setReportOpen] = useState(false);
-  const [isEditing, setIsEditing] = useState(false);
   const [imagePreview, setImagePreview] = useState<InsuranceImagePreview>(null);
   const [reportDocs, setReportDocs] = useState<CaseDocument[]>([]);
   const [reportDocsLoading, setReportDocsLoading] = useState(false);
-  // Live aiSummary state — initialized from the record on tile change,
-  // refreshed when the user clicks "Regenerate".
-  const [aiSummary, setAiSummary] = useState<string | null>(null);
-  const [aiSummaryGeneratedAtIso, setAiSummaryGeneratedAtIso] = useState<string | null>(
-    null
-  );
-  const [aiSummaryGenerating, setAiSummaryGenerating] = useState(false);
-  const [aiSummaryError, setAiSummaryError] = useState("");
+  // Bumped after an in-modal save so the report documents (incl. insurance
+  // cards) re-fetch and show the latest images.
+  const [reportDocsRefreshKey, setReportDocsRefreshKey] = useState(0);
 
   useEffect(() => {
     try {
@@ -98,45 +112,18 @@ export function CasesView({ cases }: { cases: CaseListItem[] }) {
     }
   };
 
-  const selectedCase = cases.find((c) => c.id === selectedId) ?? cases[0] ?? null;
+  const normalizedFilter = filterText.trim().toLowerCase();
+  const visibleCases = normalizedFilter
+    ? cases.filter((c) =>
+        [c.name, c.mrn, c.status, c.email, c.phone, c.insuranceCarrier].some(
+          (f) => typeof f === "string" && f.toLowerCase().includes(normalizedFilter)
+        )
+      )
+    : cases;
+
+  const selectedCase =
+    cases.find((c) => c.id === selectedId) ?? visibleCases[0] ?? cases[0] ?? null;
   const selectedCaseId = selectedCase?.id ?? "";
-
-  // Sync the live aiSummary fields whenever the selected case changes (e.g.
-  // user clicks a different tile). New tile → start from whatever is stored.
-  useEffect(() => {
-    setAiSummary(selectedCase?.aiSummary ?? null);
-    setAiSummaryGeneratedAtIso(selectedCase?.aiSummaryGeneratedAtIso ?? null);
-    setAiSummaryError("");
-  }, [selectedCase?.id, selectedCase?.aiSummary, selectedCase?.aiSummaryGeneratedAtIso]);
-
-  const regenerateAiSummary = async () => {
-    if (!selectedCase || aiSummaryGenerating) return;
-    setAiSummaryGenerating(true);
-    setAiSummaryError("");
-    try {
-      const response = await fetch(`/api/cases/${selectedCase.id}/ai-summary`, {
-        method: "POST",
-      });
-      const data = (await response.json()) as {
-        aiSummary?: string;
-        aiSummaryGeneratedAt?: string;
-        error?: string;
-      };
-      if (!response.ok) {
-        throw new Error(data.error || `Generation failed (${response.status}).`);
-      }
-      setAiSummary(typeof data.aiSummary === "string" ? data.aiSummary : null);
-      setAiSummaryGeneratedAtIso(
-        typeof data.aiSummaryGeneratedAt === "string" ? data.aiSummaryGeneratedAt : null
-      );
-    } catch (err) {
-      setAiSummaryError(
-        err instanceof Error ? err.message : "Could not generate the AI summary."
-      );
-    } finally {
-      setAiSummaryGenerating(false);
-    }
-  };
 
   // When the report modal is open, lazy-load the selected case's uploaded
   // documents (insurance cards + Step 3 files). Re-runs if the user switches
@@ -163,13 +150,86 @@ export function CasesView({ cases }: { cases: CaseListItem[] }) {
     return () => {
       cancelled = true;
     };
-  }, [reportOpen, selectedCaseId]);
+  }, [reportOpen, selectedCaseId, reportDocsRefreshKey]);
+
+  // Tear down toast timers on unmount.
+  useEffect(() => {
+    return () => {
+      if (toastHideTimer.current) clearTimeout(toastHideTimer.current);
+      if (toastResetTimer.current) clearTimeout(toastResetTimer.current);
+    };
+  }, []);
+
+  const showToast = (message: string) => {
+    if (toastHideTimer.current) clearTimeout(toastHideTimer.current);
+    if (toastResetTimer.current) clearTimeout(toastResetTimer.current);
+    setToast({ message, state: "show" });
+    toastHideTimer.current = setTimeout(
+      () => setToast((p) => ({ ...p, state: "leave" })),
+      4000
+    );
+    toastResetTimer.current = setTimeout(
+      () => setToast({ message: "", state: "hidden" }),
+      4500
+    );
+  };
+
+  // Show a toast when arriving from the Create Case wizard, then strip the
+  // query param (without remounting) so it doesn't re-fire on refresh.
+  useEffect(() => {
+    if (!notice) return;
+    if (notice === "created") {
+      showToast("Case created and submitted for review.");
+    } else if (notice === "updated") {
+      showToast("Case updated.");
+    }
+    if (typeof window !== "undefined") {
+      window.history.replaceState(null, "", "/cases");
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [notice]);
+
+  // Deep-link from the global search: filter the saved-requests list by the
+  // typed query and select the focused case, then strip the query params so a
+  // refresh doesn't keep forcing them.
+  useEffect(() => {
+    if (!focusId && initialFilter == null) return;
+    if (initialFilter != null) setFilterText(initialFilter.trim());
+    if (focusId && cases.some((c) => c.id === focusId)) {
+      setSelectedId(focusId);
+    }
+    if (typeof window !== "undefined") {
+      window.history.replaceState(null, "", "/cases");
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [focusId, initialFilter]);
 
   const openShare = () => {
     setShareSelected("");
     setShareError(false);
     setShareErrorMessage("");
     setShareOpen(true);
+  };
+
+  // The share button stays clickable so we can explain why sharing is/ isn't
+  // available instead of silently doing nothing on a disabled button.
+  const handleShareClick = () => {
+    if (!selectedCase) return;
+    if (selectedCase.rawStatus === "draft") {
+      showToast("Submit this case first — drafts can't be shared with a GI specialist.");
+      return;
+    }
+    if (selectedCase.rawStatus !== "submitted") {
+      const who = selectedCase.sharedWithGiUser;
+      const when = formatDateTime(selectedCase.sharedWithGiAtIso);
+      showToast(
+        who
+          ? `This case has already been shared with ${who}${when ? ` on ${when}` : ""}.`
+          : "This case has already been shared with a GI specialist."
+      );
+      return;
+    }
+    openShare();
   };
 
   // Lazy-load GI users the first time the share modal is opened. Refetches
@@ -234,8 +294,11 @@ export function CasesView({ cases }: { cases: CaseListItem[] }) {
       if (!response.ok) {
         throw new Error(data.error || `Share failed (${response.status}).`);
       }
+      const giName =
+        giUsers.find((g) => g.id === shareSelected)?.displayName ?? "the GI specialist";
       setShareOpen(false);
       router.refresh();
+      showToast(`Case shared with ${giName}.`);
     } catch (err) {
       setShareErrorMessage(
         err instanceof Error ? err.message : "Could not share the case."
@@ -246,7 +309,6 @@ export function CasesView({ cases }: { cases: CaseListItem[] }) {
   };
 
   const openReport = () => {
-    setIsEditing(false);
     setReportOpen(true);
   };
 
@@ -256,6 +318,23 @@ export function CasesView({ cases }: { cases: CaseListItem[] }) {
         <h1>Cases</h1>
         <p className="cases-page-lede">Select a case and share with GI Specialist</p>
       </div>
+
+      {normalizedFilter ? (
+        <div className="cases-filter-banner" role="status">
+          <span>
+            Showing {visibleCases.length}{" "}
+            {visibleCases.length === 1 ? "case" : "cases"} matching “
+            {filterText.trim()}”
+          </span>
+          <button
+            type="button"
+            className="cases-filter-banner__clear"
+            onClick={() => setFilterText("")}
+          >
+            Clear filter
+          </button>
+        </div>
+      ) : null}
 
       <section
         className={`cases-saved${savedCollapsed ? " cases-saved--collapsed" : ""}`}
@@ -273,7 +352,11 @@ export function CasesView({ cases }: { cases: CaseListItem[] }) {
               <span className="cases-section-title" id="cases-saved-heading">
                 Your saved requests
               </span>
-              <span className="cases-saved__meta">{cases.length} on file</span>
+              <span className="cases-saved__meta">
+                {normalizedFilter
+                  ? `${visibleCases.length} of ${cases.length}`
+                  : `${cases.length} on file`}
+              </span>
             </span>
             <span className="cases-saved__chevron" aria-hidden="true">
               <svg width="20" height="20" viewBox="0 0 24 24" fill="none">
@@ -297,7 +380,14 @@ export function CasesView({ cases }: { cases: CaseListItem[] }) {
           hidden={savedCollapsed}
         >
           <div className="cases-grid" role="list">
-            {cases.map((c) => (
+            {visibleCases.length === 0 ? (
+              <p className="cases-grid__empty">
+                {cases.length === 0
+                  ? "No cases are found."
+                  : `No cases match “${filterText.trim()}”.`}
+              </p>
+            ) : null}
+            {visibleCases.map((c) => (
               <CaseTile
                 key={c.id}
                 record={c}
@@ -338,8 +428,8 @@ export function CasesView({ cases }: { cases: CaseListItem[] }) {
                 <button
                   type="button"
                   className="cases-btn cases-btn--outline"
-                  onClick={openShare}
-                  disabled={selectedCase.rawStatus !== "submitted"}
+                  onClick={handleShareClick}
+                  disabled={selectedCase.rawStatus === "draft"}
                   title={
                     selectedCase.rawStatus === "draft"
                       ? "Submit the case to enable sharing."
@@ -400,19 +490,29 @@ export function CasesView({ cases }: { cases: CaseListItem[] }) {
           record={selectedCase}
           documents={reportDocs}
           documentsLoading={reportDocsLoading}
-          isEditing={isEditing}
-          onToggleEdit={() => setIsEditing((v) => !v)}
+          onSaved={() => {
+            router.refresh();
+            setReportDocsRefreshKey((k) => k + 1);
+            showToast("Case updated.");
+          }}
           onClose={() => setReportOpen(false)}
           imagePreview={imagePreview}
           onShowImage={(p) => setImagePreview(p)}
           onCloseImage={() => setImagePreview(null)}
-          aiSummary={aiSummary}
-          aiSummaryGeneratedAtIso={aiSummaryGeneratedAtIso}
-          aiSummaryGenerating={aiSummaryGenerating}
-          aiSummaryError={aiSummaryError}
-          onRegenerateAiSummary={regenerateAiSummary}
         />
       ) : null}
+
+      <div
+        className={`cases-toast${
+          toast.state === "show" || toast.state === "leave" ? " cases-toast--show" : ""
+        }${toast.state === "leave" ? " cases-toast--leave" : ""}`}
+        role="status"
+        aria-live="polite"
+        aria-atomic="true"
+        aria-hidden={toast.state === "hidden"}
+      >
+        <p className="cases-toast__text">{toast.message}</p>
+      </div>
     </main>
   );
 }
@@ -579,12 +679,22 @@ function buildTimelineSteps(record: CaseListItem): TimelineStep[] {
       meta: "Not yet shared with GI specialist",
     });
   } else if (status === "under_review") {
-    steps.push({
-      title: "GI Specialist Reviewing",
-      state: "current",
-      meta: sharedMeta ?? "GI specialist reviewing",
-      badge: "In progress",
-    });
+    // An open case with a published report has finished the review even though
+    // it stays open ("Finalized") — show the review step as done, not current.
+    steps.push(
+      record.hasFinalReport
+        ? {
+            title: "GI Specialist Reviewing",
+            state: "done",
+            meta: sharedMeta ?? "Review complete",
+          }
+        : {
+            title: "GI Specialist Reviewing",
+            state: "current",
+            meta: sharedMeta ?? "GI specialist reviewing",
+            badge: "In progress",
+          }
+    );
   } else {
     // completed | closed
     steps.push({
@@ -594,10 +704,11 @@ function buildTimelineSteps(record: CaseListItem): TimelineStep[] {
     });
   }
 
-  // 4) Final disposition — reached when the GI specialist publishes a report.
+  // 4) Completed — the GI specialist shared a report back to the PCP, which
+  //    marks the case completed.
   if (record.hasFinalReport) {
     steps.push({
-      title: "Final disposition",
+      title: "Completed",
       state: "done",
       meta: dispositionDate
         ? `GI report ready · ${dispositionDate}`
@@ -767,17 +878,11 @@ type ReportModalProps = {
   record: CaseListItem;
   documents: CaseDocument[];
   documentsLoading: boolean;
-  isEditing: boolean;
-  onToggleEdit: () => void;
+  onSaved: () => void;
   onClose: () => void;
   imagePreview: InsuranceImagePreview;
   onShowImage: (preview: InsuranceImagePreview) => void;
   onCloseImage: () => void;
-  aiSummary: string | null;
-  aiSummaryGeneratedAtIso: string | null;
-  aiSummaryGenerating: boolean;
-  aiSummaryError: string;
-  onRegenerateAiSummary: () => void;
 };
 
 const DOC_KIND_LABEL: Record<string, string> = {
@@ -799,28 +904,233 @@ function formatDocDate(iso: string): string {
   });
 }
 
+const GENDER_OPTIONS: { value: string; label: string }[] = [
+  { value: "female", label: "Female" },
+  { value: "male", label: "Male" },
+  { value: "non_binary", label: "Non-binary" },
+  { value: "prefer_not_to_say", label: "Prefer not to say" },
+  { value: "other", label: "Other" },
+];
+
+const editInputStyle: React.CSSProperties = {
+  width: "100%",
+  marginTop: 4,
+  padding: "6px 9px",
+  border: "1px solid #cbd5e1",
+  borderRadius: 7,
+  font: "inherit",
+  fontSize: 14,
+  color: "#0f172a",
+  background: "#fff",
+};
+
 function ReportModal({
   open,
   record,
   documents,
   documentsLoading,
-  isEditing,
-  onToggleEdit,
+  onSaved,
   onClose,
   imagePreview,
   onShowImage,
   onCloseImage,
-  aiSummary,
-  aiSummaryGeneratedAtIso,
-  aiSummaryGenerating,
-  aiSummaryError,
-  onRegenerateAiSummary,
 }: ReportModalProps) {
   const insuranceFront = documents.find((d) => d.kind === "insurance_card_front");
   const insuranceBack = documents.find((d) => d.kind === "insurance_card_back");
   const otherDocs = documents.filter(
     (d) => d.kind !== "insurance_card_front" && d.kind !== "insurance_card_back"
   );
+
+  const [editing, setEditing] = useState(false);
+  const [form, setForm] = useState<CaseListItem["editable"]>(record.editable);
+  const [insuranceFiles, setInsuranceFiles] = useState<{
+    front: File | null;
+    back: File | null;
+  }>({ front: null, back: null });
+  const [saving, setSaving] = useState(false);
+  const [error, setError] = useState("");
+  const [busyDoc, setBusyDoc] = useState(false);
+  const addDocsRef = useRef<HTMLInputElement | null>(null);
+
+  // Editing stays available until the GI specialist shares a report back (their
+  // sign-off); after that the case is locked.
+  const canEdit = !record.hasFinalReport;
+
+  // Leave edit mode when the modal closes or a different case is opened.
+  useEffect(() => {
+    setEditing(false);
+    setError("");
+    setInsuranceFiles({ front: null, back: null });
+  }, [open, record.id]);
+
+  const setField = (key: keyof CaseListItem["editable"], value: string) =>
+    setForm((f) => ({ ...f, [key]: value }));
+
+  const startEdit = () => {
+    if (!canEdit) return;
+    setForm(record.editable);
+    setInsuranceFiles({ front: null, back: null });
+    setError("");
+    setEditing(true);
+  };
+
+  const cancelEdit = () => {
+    setError("");
+    setInsuranceFiles({ front: null, back: null });
+    setEditing(false);
+  };
+
+  const validate = (): string => {
+    if (!form.fullLegalName.trim()) return "Full legal name is required.";
+    if (!form.dateOfBirth || ageFromDob(form.dateOfBirth) == null) {
+      return "Enter a valid date of birth.";
+    }
+    if (!form.gender) return "Gender is required.";
+    if (!form.address.trim()) return "Patient address is required.";
+    if (!isValidUsPhone(form.mobile)) return "Enter a valid US phone number.";
+    if (!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(form.email)) {
+      return "Enter a valid email address.";
+    }
+    const MAX = 5 * 1024 * 1024;
+    if (insuranceFiles.front && insuranceFiles.front.size > MAX) {
+      return "Insurance front image exceeds the 5 MB limit.";
+    }
+    if (insuranceFiles.back && insuranceFiles.back.size > MAX) {
+      return "Insurance back image exceeds the 5 MB limit.";
+    }
+    return "";
+  };
+
+  // Replaces one insurance card: deletes the existing card doc (if any) so the
+  // report doesn't keep showing the old image, then uploads the new file.
+  const uploadCard = async (
+    side: "front" | "back",
+    file: File,
+    existing: CaseDocument | undefined
+  ) => {
+    if (existing) {
+      await fetch(`/api/cases/${record.id}/documents/${existing.fileId}`, {
+        method: "DELETE",
+      });
+    }
+    const fd = new FormData();
+    fd.append("file", file);
+    fd.append("kind", side === "front" ? "insurance_card_front" : "insurance_card_back");
+    const res = await fetch(`/api/cases/${record.id}/documents`, {
+      method: "POST",
+      body: fd,
+    });
+    if (!res.ok) {
+      const data = (await res.json().catch(() => ({}))) as { error?: string };
+      throw new Error(data.error || `Could not upload the ${side} insurance card.`);
+    }
+  };
+
+  const handleSave = async () => {
+    if (saving) return;
+    const message = validate();
+    if (message) {
+      setError(message);
+      return;
+    }
+    setSaving(true);
+    setError("");
+    try {
+      const res = await fetch(`/api/cases/${record.id}/about`, {
+        method: "PATCH",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          fullLegalName: form.fullLegalName,
+          gender: form.gender,
+          dateOfBirth: form.dateOfBirth,
+          address: form.address,
+          state: form.state,
+          mobile: form.mobile,
+          email: form.email,
+          insuranceCarrier: form.insuranceCarrier,
+          policyId: form.policyId,
+          groupName: form.groupName,
+          effectiveDate: form.effectiveDate,
+        }),
+      });
+      const data = (await res.json().catch(() => ({}))) as { error?: string };
+      if (!res.ok) throw new Error(data.error || "Could not save the changes.");
+
+      // Upload any replaced insurance cards.
+      if (insuranceFiles.front) await uploadCard("front", insuranceFiles.front, insuranceFront);
+      if (insuranceFiles.back) await uploadCard("back", insuranceFiles.back, insuranceBack);
+
+      setInsuranceFiles({ front: null, back: null });
+      setEditing(false);
+      onSaved(); // re-fetch server data + report docs so the edits show
+    } catch (e) {
+      setError(e instanceof Error ? e.message : "Could not save the changes.");
+    } finally {
+      setSaving(false);
+    }
+  };
+
+  // Delete any uploaded file (document or insurance card), then refresh.
+  const removeDoc = async (fileId: string) => {
+    if (busyDoc) return;
+    setBusyDoc(true);
+    setError("");
+    try {
+      const res = await fetch(`/api/cases/${record.id}/documents/${fileId}`, {
+        method: "DELETE",
+      });
+      if (!res.ok) {
+        const data = (await res.json().catch(() => ({}))) as { error?: string };
+        throw new Error(data.error || "Could not delete the file.");
+      }
+      onSaved();
+    } catch (e) {
+      setError(e instanceof Error ? e.message : "Could not delete the file.");
+    } finally {
+      setBusyDoc(false);
+    }
+  };
+
+  // Add (or replace) uploaded documents — validates type + size, then uploads.
+  const addDocs = async (fileList: FileList | null) => {
+    if (!fileList || fileList.length === 0 || busyDoc) return;
+    const MAX = 5 * 1024 * 1024;
+    const okExt = /\.(png|jpe?g|pdf)$/i;
+    const picked = Array.from(fileList);
+    const invalid = picked.find((f) => !okExt.test(f.name) || f.size > MAX);
+    if (invalid) {
+      setError(
+        !okExt.test(invalid.name)
+          ? `Unsupported file type: ${invalid.name}. Use PNG, JPG, or PDF.`
+          : `File too large (max 5 MB): ${invalid.name}.`
+      );
+      return;
+    }
+    setBusyDoc(true);
+    setError("");
+    try {
+      for (const file of picked) {
+        const fd = new FormData();
+        fd.append("file", file);
+        fd.append("kind", "other");
+        const res = await fetch(`/api/cases/${record.id}/documents`, {
+          method: "POST",
+          body: fd,
+        });
+        if (!res.ok) {
+          const data = (await res.json().catch(() => ({}))) as { error?: string };
+          throw new Error(data.error || `Could not upload ${file.name}.`);
+        }
+      }
+      onSaved();
+    } catch (e) {
+      setError(e instanceof Error ? e.message : "Could not upload the file.");
+    } finally {
+      setBusyDoc(false);
+    }
+  };
+
+  const editAge = ageFromDob(form.dateOfBirth);
 
   return (
     <div className="cases-share-modal" hidden={!open}>
@@ -835,13 +1145,8 @@ function ReportModal({
           <h3 id="case-report-title">Patient report</h3>
         </div>
 
-        <div className={`cases-report-modal__content${isEditing ? " is-editing" : ""}`}>
-          <article
-            className="cases-report-sheet"
-            contentEditable={isEditing}
-            spellCheck={isEditing}
-            suppressContentEditableWarning
-          >
+        <div className="cases-report-modal__content">
+          <article className="cases-report-sheet">
             <header className="cases-report-sheet__hero">
               <div className="cases-report-sheet__patient">
                 <div className="cases-report-sheet__avatar">{record.initials}</div>
@@ -861,34 +1166,13 @@ function ReportModal({
               </div>
             </header>
 
-            <div className="cases-report-ai">
-              <div className="cases-report-ai__head">
-                <h5>AI-Generated Summary</h5>
-                <button
-                  type="button"
-                  className="cases-report-ai__regen"
-                  onClick={onRegenerateAiSummary}
-                  disabled={aiSummaryGenerating}
-                >
-                  {aiSummaryGenerating
-                    ? "Generating…"
-                    : aiSummary
-                      ? "Regenerate"
-                      : "Generate AI summary"}
-                </button>
-              </div>
-              {aiSummaryError ? (
-                <p className="cases-report-ai__error">{aiSummaryError}</p>
-              ) : null}
-              <p className="cases-report-ai__body">
-                {aiSummary ?? record.aiFirstSummary}
+            <div>
+              <h5>Summary to inbox</h5>
+              <p>
+                {record.inboxMessage.trim()
+                  ? record.inboxMessage
+                  : "No inbox summary was provided for this case."}
               </p>
-              {aiSummaryGeneratedAtIso ? (
-                <p className="cases-report-ai__footnote">
-                  AI-assisted preliminary summary · generated{" "}
-                  {formatDocDate(aiSummaryGeneratedAtIso)}
-                </p>
-              ) : null}
             </div>
 
             <div>
@@ -896,27 +1180,96 @@ function ReportModal({
               <div className="cases-report-grid">
                 <p>
                   <span>Full legal name</span>
-                  <strong>{record.name}</strong>
+                  {editing ? (
+                    <input
+                      style={editInputStyle}
+                      type="text"
+                      value={form.fullLegalName}
+                      onChange={(e) => setField("fullLegalName", e.target.value)}
+                    />
+                  ) : (
+                    <strong>{record.name}</strong>
+                  )}
                 </p>
                 <p>
-                  <span>Age / gender</span>
-                  <strong>{record.demo}</strong>
+                  <span>{editing ? "Gender" : "Age / gender"}</span>
+                  {editing ? (
+                    <select
+                      style={editInputStyle}
+                      value={form.gender}
+                      onChange={(e) => setField("gender", e.target.value)}
+                    >
+                      <option value="">Select…</option>
+                      {GENDER_OPTIONS.map((g) => (
+                        <option key={g.value} value={g.value}>
+                          {g.label}
+                        </option>
+                      ))}
+                    </select>
+                  ) : (
+                    <strong>{record.demo}</strong>
+                  )}
                 </p>
                 <p>
                   <span>Date of birth</span>
-                  <strong>{record.dob}</strong>
+                  {editing ? (
+                    <>
+                      <input
+                        style={editInputStyle}
+                        type="date"
+                        max={new Date().toISOString().slice(0, 10)}
+                        value={form.dateOfBirth}
+                        onChange={(e) => setField("dateOfBirth", e.target.value)}
+                      />
+                      <small style={{ color: "#64748b", fontSize: 12 }}>
+                        {editAge != null
+                          ? `Age: ${editAge} ${editAge === 1 ? "year" : "years"}`
+                          : "Age is calculated from the date of birth."}
+                      </small>
+                    </>
+                  ) : (
+                    <strong>{record.dob}</strong>
+                  )}
                 </p>
                 <p>
                   <span>Phone</span>
-                  <strong>{record.phone}</strong>
+                  {editing ? (
+                    <input
+                      style={editInputStyle}
+                      type="tel"
+                      inputMode="tel"
+                      value={form.mobile}
+                      onChange={(e) => setField("mobile", formatUsPhone(e.target.value))}
+                    />
+                  ) : (
+                    <strong>{record.phone}</strong>
+                  )}
                 </p>
                 <p>
                   <span>Email</span>
-                  <strong>{record.email}</strong>
+                  {editing ? (
+                    <input
+                      style={editInputStyle}
+                      type="email"
+                      value={form.email}
+                      onChange={(e) => setField("email", e.target.value)}
+                    />
+                  ) : (
+                    <strong>{record.email}</strong>
+                  )}
                 </p>
                 <p>
                   <span>Address</span>
-                  <strong>{record.address}</strong>
+                  {editing ? (
+                    <input
+                      style={editInputStyle}
+                      type="text"
+                      value={form.address}
+                      onChange={(e) => setField("address", e.target.value)}
+                    />
+                  ) : (
+                    <strong>{record.address}</strong>
+                  )}
                 </p>
               </div>
             </div>
@@ -926,32 +1279,87 @@ function ReportModal({
               <div className="cases-report-grid">
                 <p>
                   <span>Insurance carrier</span>
-                  <strong>{record.insuranceCarrier}</strong>
+                  {editing ? (
+                    <input
+                      style={editInputStyle}
+                      type="text"
+                      value={form.insuranceCarrier}
+                      onChange={(e) => setField("insuranceCarrier", e.target.value)}
+                    />
+                  ) : (
+                    <strong>{record.insuranceCarrier}</strong>
+                  )}
                 </p>
                 <p>
                   <span>Policy ID</span>
-                  <strong>{record.policyId}</strong>
+                  {editing ? (
+                    <input
+                      style={editInputStyle}
+                      type="text"
+                      value={form.policyId}
+                      onChange={(e) => setField("policyId", e.target.value)}
+                    />
+                  ) : (
+                    <strong>{record.policyId}</strong>
+                  )}
                 </p>
                 <p>
                   <span>Group name</span>
-                  <strong>{record.groupName}</strong>
+                  {editing ? (
+                    <input
+                      style={editInputStyle}
+                      type="text"
+                      value={form.groupName}
+                      onChange={(e) => setField("groupName", e.target.value)}
+                    />
+                  ) : (
+                    <strong>{record.groupName}</strong>
+                  )}
                 </p>
                 <p>
                   <span>Effective date</span>
-                  <strong>{record.effectiveDate}</strong>
+                  {editing ? (
+                    <input
+                      style={editInputStyle}
+                      type="date"
+                      value={form.effectiveDate}
+                      onChange={(e) => setField("effectiveDate", e.target.value)}
+                    />
+                  ) : (
+                    <strong>{record.effectiveDate}</strong>
+                  )}
                 </p>
               </div>
               <div className="cases-report-doc-gallery cases-report-doc-gallery--insurance">
-                <InsuranceCard
-                  side="FRONT SIDE"
-                  doc={insuranceFront}
-                  onShowImage={onShowImage}
-                />
-                <InsuranceCard
-                  side="BACK SIDE"
-                  doc={insuranceBack}
-                  onShowImage={onShowImage}
-                />
+                {editing ? (
+                  <>
+                    <InsuranceEditTile
+                      side="FRONT SIDE"
+                      currentUrl={insuranceFront?.url ?? null}
+                      file={insuranceFiles.front}
+                      onPick={(f) => setInsuranceFiles((s) => ({ ...s, front: f }))}
+                    />
+                    <InsuranceEditTile
+                      side="BACK SIDE"
+                      currentUrl={insuranceBack?.url ?? null}
+                      file={insuranceFiles.back}
+                      onPick={(f) => setInsuranceFiles((s) => ({ ...s, back: f }))}
+                    />
+                  </>
+                ) : (
+                  <>
+                    <InsuranceCard
+                      side="FRONT SIDE"
+                      doc={insuranceFront}
+                      onShowImage={onShowImage}
+                    />
+                    <InsuranceCard
+                      side="BACK SIDE"
+                      doc={insuranceBack}
+                      onShowImage={onShowImage}
+                    />
+                  </>
+                )}
               </div>
             </div>
 
@@ -961,17 +1369,50 @@ function ReportModal({
                 <p style={{ color: "#64748b", margin: "8px 0 0", fontSize: 14 }}>
                   Loading documents…
                 </p>
-              ) : otherDocs.length === 0 ? (
+              ) : otherDocs.length === 0 && !editing ? (
                 <p style={{ color: "#64748b", margin: "8px 0 0", fontSize: 14 }}>
                   No documents were uploaded with this case.
                 </p>
               ) : (
                 <div className="cases-report-doc-gallery">
                   {otherDocs.map((doc) => (
-                    <DocCard key={doc.fileId} doc={doc} />
+                    <DocCard
+                      key={doc.fileId}
+                      doc={doc}
+                      editable={editing}
+                      busy={busyDoc}
+                      onDelete={() => removeDoc(doc.fileId)}
+                    />
                   ))}
                 </div>
               )}
+              {editing ? (
+                <>
+                  <input
+                    ref={addDocsRef}
+                    type="file"
+                    multiple
+                    accept=".png,.jpg,.jpeg,.pdf"
+                    style={{ display: "none" }}
+                    onChange={(e) => {
+                      addDocs(e.target.files);
+                      e.target.value = "";
+                    }}
+                  />
+                  <button
+                    type="button"
+                    className="cases-btn cases-btn--outline"
+                    style={{ marginTop: 12 }}
+                    disabled={busyDoc}
+                    onClick={() => addDocsRef.current?.click()}
+                  >
+                    {busyDoc ? "Working…" : "+ Add files"}
+                  </button>
+                  <p style={{ color: "#94a3b8", margin: "6px 0 0", fontSize: 12 }}>
+                    PNG, JPG, PDF · Max 5 MB per file
+                  </p>
+                </>
+              ) : null}
             </div>
           </article>
         </div>
@@ -1014,21 +1455,64 @@ function ReportModal({
           </div>
         ) : null}
 
+        {editing && error ? (
+          <p
+            role="alert"
+            style={{
+              color: "#b91c1c",
+              margin: "0 24px",
+              fontSize: 14,
+              fontWeight: 500,
+            }}
+          >
+            {error}
+          </p>
+        ) : null}
+
         <div className="cases-share-modal__actions">
-          <button
-            type="button"
-            className="cases-btn cases-btn--muted"
-            onClick={onToggleEdit}
-          >
-            {isEditing ? "Done" : "Edit"}
-          </button>
-          <button
-            type="button"
-            className="cases-btn cases-btn--outline"
-            onClick={onClose}
-          >
-            Close
-          </button>
+          {editing ? (
+            <>
+              <button
+                type="button"
+                className="cases-btn cases-btn--outline"
+                onClick={cancelEdit}
+                disabled={saving}
+              >
+                Cancel
+              </button>
+              <button
+                type="button"
+                className="cases-btn cases-btn--report"
+                onClick={handleSave}
+                disabled={saving}
+              >
+                {saving ? "Saving…" : "Save changes"}
+              </button>
+            </>
+          ) : (
+            <>
+              {canEdit ? (
+                <button
+                  type="button"
+                  className="cases-btn cases-btn--muted"
+                  onClick={startEdit}
+                >
+                  Edit
+                </button>
+              ) : (
+                <span className="cases-report-locked" title="The GI specialist has shared a report — this case is locked.">
+                  🔒 Locked after GI report
+                </span>
+              )}
+              <button
+                type="button"
+                className="cases-btn cases-btn--outline"
+                onClick={onClose}
+              >
+                Close
+              </button>
+            </>
+          )}
         </div>
       </div>
     </div>
@@ -1081,13 +1565,109 @@ function InsuranceCard({
   );
 }
 
-function DocCard({ doc }: { doc: CaseDocument }) {
+/** Editable insurance-card tile (edit mode): shows the current/picked image and
+ *  lets the user pick a replacement. */
+function InsuranceEditTile({
+  side,
+  currentUrl,
+  file,
+  onPick,
+}: {
+  side: string;
+  currentUrl: string | null;
+  file: File | null;
+  onPick: (file: File | null) => void;
+}) {
+  const [previewUrl, setPreviewUrl] = useState<string | null>(null);
+
+  useEffect(() => {
+    if (file && file.type.startsWith("image/")) {
+      const url = URL.createObjectURL(file);
+      setPreviewUrl(url);
+      return () => URL.revokeObjectURL(url);
+    }
+    setPreviewUrl(null);
+  }, [file]);
+
+  const isPdf = !!file && !file.type.startsWith("image/");
+  const shownImage = previewUrl ?? (!file ? currentUrl : null);
+
+  return (
+    <label
+      className="cases-report-doc-card cases-report-doc-card--insurance"
+      style={{ cursor: "pointer", position: "relative", outline: "2px dashed #93c5fd", outlineOffset: -2 }}
+    >
+      <span className="cases-report-doc-card__side-label">{side}</span>
+      <input
+        type="file"
+        accept=".png,.jpg,.jpeg,.pdf"
+        style={{ display: "none" }}
+        onChange={(e) => onPick(e.target.files?.[0] ?? null)}
+      />
+      {shownImage ? (
+        // eslint-disable-next-line @next/next/no-img-element
+        <img src={shownImage} alt={`Insurance card ${side.toLowerCase()}`} loading="lazy" />
+      ) : isPdf ? (
+        <div className="cases-report-doc-card__meta">
+          <strong>{file?.name}</strong>
+          <span>PDF selected</span>
+        </div>
+      ) : (
+        <div className="cases-report-doc-card__meta">
+          <strong>Add {side.toLowerCase()}</strong>
+          <span>PNG, JPG, PDF · max 5 MB</span>
+        </div>
+      )}
+      <span
+        style={{
+          position: "absolute",
+          bottom: 0,
+          left: 0,
+          right: 0,
+          padding: "4px 8px",
+          fontSize: 11,
+          fontWeight: 700,
+          color: "#fff",
+          background: "rgba(37, 99, 235, 0.85)",
+          textAlign: "center",
+        }}
+      >
+        {file ? "Tap to change" : "Tap to replace"}
+      </span>
+    </label>
+  );
+}
+
+function DocCard({
+  doc,
+  editable = false,
+  busy = false,
+  onDelete,
+}: {
+  doc: CaseDocument;
+  editable?: boolean;
+  busy?: boolean;
+  onDelete?: () => void;
+}) {
   const isImage = doc.contentType.startsWith("image/");
   const kindLabel = DOC_KIND_LABEL[doc.kind] ?? "Document";
   const date = formatDocDate(doc.uploadedAt);
   const meta = date ? `${kindLabel} • ${date}` : kindLabel;
 
   return (
+    <div className="cases-report-doc-card-wrap">
+      {editable && onDelete ? (
+        <button
+          type="button"
+          className="cases-report-doc-card__delete"
+          aria-label={`Delete ${doc.fileName}`}
+          title="Delete file"
+          disabled={busy}
+          onClick={onDelete}
+        >
+          ×
+        </button>
+      ) : null}
     <a
       className="cases-report-doc-card"
       href={doc.url}
@@ -1117,5 +1697,6 @@ function DocCard({ doc }: { doc: CaseDocument }) {
         <span>{meta}</span>
       </div>
     </a>
+    </div>
   );
 }

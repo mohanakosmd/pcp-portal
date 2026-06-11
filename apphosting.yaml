@@ -49,9 +49,6 @@ env:
   - variable: SENDGRID_SENDER_EMAIL
     value: admin@aigicare.com
     availability: [RUNTIME]
-  - variable: SIGNUP_OTP_RECIPIENT
-    value: mohan.pal@akosmdtech.com
-    availability: [RUNTIME]
 
   # --- Secrets (Cloud Secret Manager; set via `firebase apphosting:secrets:set`) ---
   - variable: PCP_SESSION_SECRET

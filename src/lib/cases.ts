@@ -3,7 +3,10 @@
 
 import { randomBytes } from "crypto";
 
+import { ageFromDob } from "@/lib/age";
 import { getDocument, listDocuments, nowIso, upsertDocument } from "@/lib/firestore-rest";
+
+export { ageFromDob };
 
 export const PCP_CASES_COLLECTION = "pcp_cases";
 
@@ -64,10 +67,10 @@ export type CaseRootDoc = {
 
 export type CaseAboutDoc = {
   fullLegalName: string;
-  age: number | null;
   gender: GenderEnum | null;
   dateOfBirth: string | null;
   address: string | null;
+  state: string | null;
   mobile: string;
   email: string;
   insuranceCarrier: string | null;
@@ -151,13 +154,16 @@ export function countCompleteAbout(about: Partial<CaseAboutDoc>): {
   required: number;
   complete: boolean;
 } {
-  // Required: fullLegalName, age, gender, mobile, email. (5)
+  // Required (the whole "About you" section): fullLegalName, dateOfBirth,
+  // gender, state, address, mobile, email. (7) Age is derived from dateOfBirth.
   // Optional but counted when present: insuranceCarrier, policyId, groupName,
   // effectiveDate, insuranceCards. (5)
   const requiredOk =
     !!about.fullLegalName &&
-    typeof about.age === "number" &&
+    !!about.dateOfBirth &&
     !!about.gender &&
+    !!about.state &&
+    !!about.address &&
     !!about.mobile &&
     !!about.email;
   const filledOptional = [
@@ -167,8 +173,8 @@ export function countCompleteAbout(about: Partial<CaseAboutDoc>): {
     about.effectiveDate,
     about.insuranceCards?.front || about.insuranceCards?.back ? "x" : null,
   ].filter((v) => v).length;
-  const filled = (requiredOk ? 5 : 0) + filledOptional;
-  return { filled, required: 5, complete: requiredOk };
+  const filled = (requiredOk ? 7 : 0) + filledOptional;
+  return { filled, required: 7, complete: requiredOk };
 }
 
 export function countCompleteHealth(health: Partial<CaseHealthDoc>): {
@@ -220,6 +226,9 @@ export type CaseListItem = {
   shortUpdated: string;
   condition: string;
   aiFirstSummary: string;
+  // The patient's full Health inbox message (Step 2 of create-case), shown as
+  // "Summary to inbox" in the report modal. Empty string when none.
+  inboxMessage: string;
   avatarBg: string;
   // Full About fields — used by the /cases "View Report" modal. Missing
   // values render as "—".
@@ -248,6 +257,21 @@ export type CaseListItem = {
   // inbox message.
   aiSummary: string | null;
   aiSummaryGeneratedAtIso: string | null;
+  // Raw About values (empty string when missing) for in-place editing in the
+  // report modal — distinct from the "—"-padded display fields above.
+  editable: {
+    fullLegalName: string;
+    gender: GenderEnum | "";
+    dateOfBirth: string;
+    address: string;
+    state: string;
+    mobile: string;
+    email: string;
+    insuranceCarrier: string;
+    policyId: string;
+    groupName: string;
+    effectiveDate: string;
+  };
 };
 
 const AVATAR_GRADIENTS = [
@@ -315,7 +339,7 @@ function formatUpdated(iso: string): { full: string; short: string } {
  * (a gi_shared_reports doc whose `case_id` points at them). Best-effort: a
  * missing collection or query error yields an empty set rather than throwing.
  */
-async function listCaseIdsWithSharedReports(): Promise<Set<string>> {
+export async function listCaseIdsWithSharedReports(): Promise<Set<string>> {
   const set = new Set<string>();
   try {
     const page = await listDocuments(GI_SHARED_REPORTS_COLLECTION, { pageSize: 500 });
@@ -365,28 +389,28 @@ export async function loadCasesForOwner(
         (typeof root.data.status === "string" ? (root.data.status as CaseStatus) : "draft") ||
         "draft";
 
-      // A published GI report means the case has reached final disposition.
-      // Reconcile the stored status (best-effort) so dashboard counts + other
-      // readers agree, and reflect it immediately in this response.
+      // When a GI specialist shares a report back to the PCP (a
+      // gi_shared_reports doc exists for this case), the case is considered
+      // done — move it to "completed". We persist the transition so dashboard
+      // counts and later loads see it without re-reading the GI collection.
+      // Cases already "completed" or "closed" are left as-is.
       const hasFinalReport = reportCaseIds.has(root.id);
-      const status: CaseStatus =
-        hasFinalReport && storedStatus !== "closed" ? "completed" : storedStatus;
+      let status: CaseStatus = storedStatus;
       if (hasFinalReport && storedStatus !== "completed" && storedStatus !== "closed") {
+        status = "completed";
         const now = nowIso();
         void upsertDocument(PCP_CASES_COLLECTION, root.id, {
           status: "completed",
           statusUpdatedAt: now,
           updatedAt: now,
         }).catch((err) =>
-          console.error(`[cases] final-disposition reconcile failed for ${root.id}:`, err)
+          console.error(`[cases] shared-report complete reconcile failed for ${root.id}:`, err)
         );
       }
 
       const display = STATUS_DISPLAY[status] ?? STATUS_DISPLAY.draft;
-      // When a report exists, surface it as the more specific "Final
-      // disposition" rather than the generic "Completed".
-      const statusLabel = hasFinalReport ? "Final disposition" : display.label;
-      const statusVariant = hasFinalReport ? "emerald" : display.variant;
+      const statusLabel = display.label;
+      const statusVariant = display.variant;
 
       const fallbackEmail =
         typeof about.email === "string" ? about.email : "";
@@ -404,7 +428,8 @@ export async function loadCasesForOwner(
             : new Date().toISOString();
       const updated = formatUpdated(updatedIso);
 
-      const ageBit = typeof about.age === "number" ? `${about.age} yrs` : null;
+      const ageVal = ageFromDob(about.dateOfBirth ?? null);
+      const ageBit = ageVal != null ? `${ageVal} yrs` : null;
       const genderBit = about.gender ? GENDER_DISPLAY[about.gender] : null;
       const demo = [ageBit, genderBit].filter(Boolean).join(" • ");
 
@@ -458,6 +483,7 @@ export async function loadCasesForOwner(
         shortUpdated: updated.short,
         condition: display.condition,
         aiFirstSummary,
+        inboxMessage: inbox,
         avatarBg: pickAvatar(root.id),
         email: orDash(about.email),
         phone: orDash(about.mobile),
@@ -476,6 +502,20 @@ export async function loadCasesForOwner(
         hasFinalReport,
         aiSummary,
         aiSummaryGeneratedAtIso,
+        editable: {
+          fullLegalName: typeof about.fullLegalName === "string" ? about.fullLegalName : "",
+          gender: (about.gender as GenderEnum) ?? "",
+          dateOfBirth: typeof about.dateOfBirth === "string" ? about.dateOfBirth : "",
+          address: typeof about.address === "string" ? about.address : "",
+          state: typeof about.state === "string" ? about.state : "",
+          mobile: typeof about.mobile === "string" ? about.mobile : "",
+          email: typeof about.email === "string" ? about.email : "",
+          insuranceCarrier:
+            typeof about.insuranceCarrier === "string" ? about.insuranceCarrier : "",
+          policyId: typeof about.policyId === "string" ? about.policyId : "",
+          groupName: typeof about.groupName === "string" ? about.groupName : "",
+          effectiveDate: typeof about.effectiveDate === "string" ? about.effectiveDate : "",
+        },
       };
     })
   );

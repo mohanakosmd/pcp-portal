@@ -1,7 +1,11 @@
 import Link from "next/link";
 
 import { readSessionUserId } from "@/lib/auth";
-import { PCP_CASES_COLLECTION, type CaseStatus } from "@/lib/cases";
+import {
+  PCP_CASES_COLLECTION,
+  listCaseIdsWithSharedReports,
+  type CaseStatus,
+} from "@/lib/cases";
 import { listDocuments } from "@/lib/firestore-rest";
 
 type Status = "review" | "docs" | "done";
@@ -74,10 +78,21 @@ async function loadDashboardData(): Promise<DashboardData> {
   const userId = await readSessionUserId();
   if (!userId) return EMPTY;
   try {
-    const page = await listDocuments(PCP_CASES_COLLECTION, { pageSize: 500 });
+    const [page, reportCaseIds] = await Promise.all([
+      listDocuments(PCP_CASES_COLLECTION, { pageSize: 500 }),
+      listCaseIdsWithSharedReports(),
+    ]);
     const owned = page.docs
       .filter((d) => !d.id.startsWith("_"))
       .filter((d) => d.data.ownerUserId === userId);
+
+    // A GI specialist sharing a report back (a gi_shared_reports doc for the
+    // case) marks the case completed — mirror the /cases reconciliation so the
+    // dashboard reflects it even before /cases has persisted the transition.
+    const effectiveStatus = (id: string, stored: CaseStatus): CaseStatus =>
+      reportCaseIds.has(id) && stored !== "completed" && stored !== "closed"
+        ? "completed"
+        : stored;
 
     // KPI counts.
     let total = 0;
@@ -94,8 +109,9 @@ async function loadDashboardData(): Promise<DashboardData> {
 
     for (const d of owned) {
       total += 1;
-      const status =
+      const stored =
         (typeof d.data.status === "string" ? (d.data.status as CaseStatus) : "draft") || "draft";
+      const status = effectiveStatus(d.id, stored);
       if (IN_PROGRESS_STATUSES.has(status)) inProgress += 1;
       if (COMPLETED_STATUSES.has(status)) completed += 1;
       const createdAt = typeof d.data.createdAt === "string" ? d.data.createdAt : null;
@@ -117,8 +133,9 @@ async function loadDashboardData(): Promise<DashboardData> {
       )
       .slice(0, 5)
       .map((d) => {
-        const status =
+        const stored =
           (typeof d.data.status === "string" ? (d.data.status as CaseStatus) : "draft") || "draft";
+        const status = effectiveStatus(d.id, stored);
         const display = STATUS_DISPLAY[status] ?? STATUS_DISPLAY.draft;
         const updated =
           typeof d.data.updatedAt === "string"
@@ -397,14 +414,28 @@ export default async function DashboardPage() {
                         <span className="dash-datetime__time">{row.timeLabel}</span>
                       </td>
                       <td>
-                        <Link
-                          className="dash-table__action"
-                          href="/cases"
-                          aria-label={`Send care request ${row.id}`}
-                        >
-                          {sendArrow}
-                          <span>Send</span>
-                        </Link>
+                        {row.status === "done" ? (
+                          // Completed / closed cases are terminal — sending is
+                          // no longer available. Active/in-progress cases keep
+                          // the live Send link.
+                          <span
+                            className="dash-table__action dash-table__action--disabled"
+                            aria-disabled="true"
+                            aria-label={`Sending unavailable — request ${row.id} is ${row.statusLabel.toLowerCase()}`}
+                          >
+                            {sendArrow}
+                            <span>Send</span>
+                          </span>
+                        ) : (
+                          <Link
+                            className="dash-table__action"
+                            href="/cases"
+                            aria-label={`Send care request ${row.id}`}
+                          >
+                            {sendArrow}
+                            <span>Send</span>
+                          </Link>
+                        )}
                       </td>
                     </tr>
                   ))}

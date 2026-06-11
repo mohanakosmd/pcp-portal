@@ -15,7 +15,9 @@ export const NOTIFICATIONS_COLLECTION = "notifications";
 export type NotificationType =
   | "case_created"
   | "case_submitted"
-  | "case_shared";
+  | "case_shared"
+  | "report_shared"
+  | "report_remark";
 
 export type RecipientType = "pcp" | "gi";
 

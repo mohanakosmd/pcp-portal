@@ -5,8 +5,12 @@
 // shape the GI portal writes (auto-generated doc id; fields fullName, email,
 // phone, portal, status, created_at) PLUS PCP-only OTP/password fields. A
 // pcp_users doc is created only once the admin approves. Flow:
-//   1. signup  → signup_requests/{autoId} (portal "pcp", status "pending") + OTP
-//   2. verify  → emailVerified=true (status stays "pending")
+//   1. signup  → staged in pcp_signup_otps/{emailKey} with an OTP (see
+//                migration 006). NOTHING is written here yet.
+//   2. verify  → on a correct OTP, the record enters this collection
+//                (signup_requests/{autoId}, portal "pcp", status "pending",
+//                emailVerified=true) and the staged doc is deleted. PCP records
+//                here are therefore always email-verified.
 //   3. admin   → (external admin portal) reviews + approves, creates the
 //                pcp_users doc from this record, then sets status="approved".
 //

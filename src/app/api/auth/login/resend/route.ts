@@ -46,7 +46,7 @@ export async function POST() {
 
     const email = typeof user.data.email === "string" ? user.data.email : "";
     const fullName = typeof user.data.name === "string" ? user.data.name : "";
-    const recipient = process.env.SIGNUP_OTP_RECIPIENT?.trim() || email;
+    const recipient = email;
     const delivery = await sendSignupOtpEmail({
       recipient,
       intendedFor: email,

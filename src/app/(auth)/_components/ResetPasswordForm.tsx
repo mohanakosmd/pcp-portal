@@ -3,26 +3,67 @@
 import { useRouter } from "next/navigation";
 import { useState } from "react";
 
+const STRONG_PASSWORD =
+  "Password must be at least 8 characters and include uppercase, lowercase, number, and special character.";
+
+function isStrongPassword(password: string): boolean {
+  return (
+    password.length >= 8 &&
+    /[a-z]/.test(password) &&
+    /[A-Z]/.test(password) &&
+    /[0-9]/.test(password) &&
+    /[^A-Za-z0-9]/.test(password)
+  );
+}
+
 export function ResetPasswordForm() {
   const router = useRouter();
   const [newPassword, setNewPassword] = useState("");
   const [confirmPassword, setConfirmPassword] = useState("");
   const [showNew, setShowNew] = useState(false);
   const [showConfirm, setShowConfirm] = useState(false);
+  const [submitting, setSubmitting] = useState(false);
   const [error, setError] = useState("");
 
-  const handleSubmit = (event: React.FormEvent<HTMLFormElement>) => {
+  const handleSubmit = async (event: React.FormEvent<HTMLFormElement>) => {
     event.preventDefault();
+    if (submitting) return;
     if (!newPassword) {
       setError("Please enter a new password.");
+      return;
+    }
+    if (!isStrongPassword(newPassword)) {
+      setError(STRONG_PASSWORD);
       return;
     }
     if (newPassword !== confirmPassword) {
       setError("Passwords do not match.");
       return;
     }
+    setSubmitting(true);
     setError("");
-    router.push("/success");
+    try {
+      const response = await fetch("/api/auth/reset-password", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ password: newPassword }),
+      });
+      let data: { error?: string } = {};
+      try {
+        data = (await response.json()) as { error?: string };
+      } catch {
+        // ignore
+      }
+      if (!response.ok) {
+        setError(data.error || "Could not reset the password.");
+        return;
+      }
+      router.push("/success");
+    } catch {
+      setError("Network error. Please try again.");
+    } finally {
+      setSubmitting(false);
+    }
   };
 
   return (
@@ -80,8 +121,8 @@ export function ResetPasswordForm() {
         </p>
       ) : null}
 
-      <button type="submit" className="action-btn" aria-label="Submit new password">
-        <span>Submit</span>
+      <button type="submit" className="action-btn" aria-label="Submit new password" disabled={submitting}>
+        <span>{submitting ? "Submitting…" : "Submit"}</span>
         <svg width="14" height="14" viewBox="0 0 14 14" fill="none" aria-hidden="true">
           <path
             d="M2.33334 7H11.6667M11.6667 7L7.00001 2.33333M11.6667 7L7.00001 11.6667"

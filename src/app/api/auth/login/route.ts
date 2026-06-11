@@ -81,7 +81,7 @@ export async function POST(request: Request) {
     await setLoginPendingCookie(userId);
 
     const fullName = typeof existing.data.name === "string" ? existing.data.name : "";
-    const recipient = process.env.SIGNUP_OTP_RECIPIENT?.trim() || email;
+    const recipient = email;
     const delivery = await sendSignupOtpEmail({
       recipient,
       intendedFor: email,

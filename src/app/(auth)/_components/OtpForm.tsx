@@ -4,7 +4,16 @@ import { useRouter } from "next/navigation";
 import { useEffect, useRef, useState } from "react";
 
 const OTP_LENGTH = 6;
+// Visible countdown / resend cooldown. The code itself stays valid for the
+// server window (OTP_TTL_SECONDS = 5 min); this 1-minute timer only gates when
+// the "Resend" link appears. Server rejects a genuinely expired code.
 const INITIAL_SECONDS = 60;
+
+function formatRemaining(seconds: number): string {
+  const m = Math.floor(seconds / 60);
+  const s = seconds % 60;
+  return `${m}:${String(s).padStart(2, "0")} Remaining`;
+}
 
 export function OtpForm({ email }: { email: string }) {
   const router = useRouter();
@@ -146,7 +155,7 @@ export function OtpForm({ email }: { email: string }) {
     }
   };
 
-  const timerText = secondsLeft > 0 ? `${secondsLeft} Sec Remaining` : "OTP expired";
+  const canResend = secondsLeft <= 0;
 
   const toastClassName = [
     "otp-toast",
@@ -188,7 +197,9 @@ export function OtpForm({ email }: { email: string }) {
             Enter the code sent to your registered Email ID.{" "}
             <span className="otp-email">{email}</span>
           </p>
-          <p className="otp-timer">{timerText}</p>
+          {secondsLeft > 0 ? (
+            <p className="otp-timer">{formatRemaining(secondsLeft)}</p>
+          ) : null}
           {error ? (
             <p
               className="section-hint section-hint--left"
@@ -197,6 +208,11 @@ export function OtpForm({ email }: { email: string }) {
             >
               {error}
             </p>
+          ) : null}
+          {canResend ? (
+            <a className="resend-link" href="#" onClick={handleResend}>
+              Didn&apos;t receive the code?
+            </a>
           ) : null}
         </div>
 
@@ -217,10 +233,6 @@ export function OtpForm({ email }: { email: string }) {
             />
           </svg>
         </button>
-
-        <a className="resend-link" href="#" onClick={handleResend}>
-          Didn&apos;t receive the code?
-        </a>
       </form>
 
       <div

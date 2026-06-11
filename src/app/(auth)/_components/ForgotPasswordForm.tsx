@@ -6,10 +6,36 @@ import { useState } from "react";
 export function ForgotPasswordForm() {
   const router = useRouter();
   const [email, setEmail] = useState("");
+  const [submitting, setSubmitting] = useState(false);
+  const [error, setError] = useState("");
 
-  const handleSubmit = (event: React.FormEvent<HTMLFormElement>) => {
+  const handleSubmit = async (event: React.FormEvent<HTMLFormElement>) => {
     event.preventDefault();
-    router.push("/forgot-password-otp");
+    if (submitting) return;
+    setSubmitting(true);
+    setError("");
+    try {
+      const response = await fetch("/api/auth/forgot-password", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ email }),
+      });
+      let data: { error?: string } = {};
+      try {
+        data = (await response.json()) as { error?: string };
+      } catch {
+        // ignore
+      }
+      if (!response.ok) {
+        setError(data.error || "Could not send the code. Please try again.");
+        return;
+      }
+      router.push(`/forgot-password-otp?email=${encodeURIComponent(email)}`);
+    } catch {
+      setError("Network error. Please try again.");
+    } finally {
+      setSubmitting(false);
+    }
   };
 
   return (
@@ -43,8 +69,18 @@ export function ForgotPasswordForm() {
         </div>
       </div>
 
-      <button type="submit" className="action-btn" aria-label="Get OTP">
-        <span>Get OTP</span>
+      {error ? (
+        <p
+          className="section-hint section-hint--left"
+          role="alert"
+          style={{ color: "#b91c1c", margin: 0 }}
+        >
+          {error}
+        </p>
+      ) : null}
+
+      <button type="submit" className="action-btn" aria-label="Get OTP" disabled={submitting}>
+        <span>{submitting ? "Sending…" : "Get OTP"}</span>
         <svg width="14" height="14" viewBox="0 0 14 14" fill="none" aria-hidden="true">
           <path
             d="M2.33334 7H11.6667M11.6667 7L7.00001 2.33333M11.6667 7L7.00001 11.6667"

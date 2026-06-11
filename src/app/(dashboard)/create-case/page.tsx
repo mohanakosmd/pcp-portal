@@ -36,7 +36,10 @@ async function loadInitialCase(caseId: string): Promise<InitialCase | null> {
   ]);
 
   const about = (aboutDoc?.data ?? {}) as Partial<CaseAboutDoc>;
-  const health = (healthDoc?.data ?? {}) as { inboxMessage?: string };
+  const health = (healthDoc?.data ?? {}) as {
+    inboxMessage?: string;
+    currentMedications?: string | null;
+  };
 
   const docs: InitialCaseDocument[] = docsPage.docs
     .filter((d) => !d.id.startsWith("_"))
@@ -62,13 +65,10 @@ async function loadInitialCase(caseId: string): Promise<InitialCase | null> {
     currentStep,
     about: {
       fullLegalName: about.fullLegalName ?? "",
-      age:
-        typeof about.age === "number" && Number.isFinite(about.age)
-          ? String(about.age)
-          : "",
       gender: (about.gender as GenderEnum | undefined) ?? "",
       dateOfBirth: about.dateOfBirth ?? "",
       address: about.address ?? "",
+      state: about.state ?? "",
       mobile: about.mobile ?? "",
       email: about.email ?? "",
       insuranceCarrier: about.insuranceCarrier ?? "",
@@ -80,6 +80,7 @@ async function loadInitialCase(caseId: string): Promise<InitialCase | null> {
     },
     health: {
       inboxMessage: health.inboxMessage ?? "",
+      currentMedications: health.currentMedications ?? "",
     },
     // Step 3 list = everything that ISN'T an insurance card.
     documents: docs.filter(

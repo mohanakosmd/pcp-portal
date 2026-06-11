@@ -3,11 +3,20 @@ import Link from "next/link";
 import { AuthBrandHeader } from "../_components/AuthBrandHeader";
 import { ForgotPasswordOtpForm } from "../_components/ForgotPasswordOtpForm";
 
-export default function ForgotPasswordOtpPage() {
+type Search = { email?: string };
+
+export default async function ForgotPasswordOtpPage({
+  searchParams,
+}: {
+  searchParams: Promise<Search>;
+}) {
+  const { email } = await searchParams;
+  const safeEmail = (email && typeof email === "string" ? email : "").trim();
+
   return (
     <>
       <AuthBrandHeader />
-      <ForgotPasswordOtpForm email="jhon_travis@outlook.com" />
+      <ForgotPasswordOtpForm email={safeEmail} />
       <Link
         href="/forgot-password"
         className="auth-back auth-back--panel-bl"

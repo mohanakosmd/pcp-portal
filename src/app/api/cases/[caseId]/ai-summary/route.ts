@@ -3,6 +3,7 @@ import { NextResponse } from "next/server";
 import { readSessionUserId } from "@/lib/auth";
 import {
   PCP_CASES_COLLECTION,
+  ageFromDob,
   readCaseOwnedBy,
   type CaseAboutDoc,
   type CaseHealthDoc,
@@ -41,7 +42,7 @@ function buildPrompt(opts: {
 
   const aboutLines = [
     field("Full legal name", about.fullLegalName),
-    field("Age", about.age),
+    field("Age", ageFromDob(about.dateOfBirth)),
     field("Gender", about.gender),
     field("Mobile", about.mobile),
     field("Email", about.email),

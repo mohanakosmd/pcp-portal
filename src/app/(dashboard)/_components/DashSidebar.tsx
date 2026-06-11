@@ -110,13 +110,6 @@ export function DashSidebar() {
       </nav>
 
       <div className="dash-sidebar__foot">
-        <a href="#" data-nav-label="Help Center">
-          <svg width="18" height="18" viewBox="0 0 24 24" fill="none" aria-hidden="true">
-            <circle cx="12" cy="12" r="9" stroke="currentColor" strokeWidth="1.6" />
-            <path d="M12 10V16M12 8V8.01" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" />
-          </svg>
-          <span className="dash-nav__text">Help Center</span>
-        </a>
         <a
           href="/login"
           data-nav-label="Logout"

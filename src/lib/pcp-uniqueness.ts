@@ -33,7 +33,11 @@ export function emailKey(email: string): string {
 }
 
 export function phoneKey(phone: string): string {
-  return phone.replace(/\D/g, "");
+  // Drop a leading US country code so "+1 (555) 123-4567" and "5551234567"
+  // resolve to the same uniqueness key.
+  let d = phone.replace(/\D/g, "");
+  if (d.length === 11 && d.startsWith("1")) d = d.slice(1);
+  return d;
 }
 
 export type IndexConflict = {

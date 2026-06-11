@@ -347,7 +347,7 @@ html {
   border: none;
   border-radius: 10px;
   background: rgba(255, 255, 255, 0.95);
-  padding: 0 14px 0 42px;
+  padding: 0 40px 0 42px;
   font-size: 16px;
   font-family: inherit;
   color: var(--dash-text);
@@ -356,6 +356,101 @@ html {
 
 .dash-search input::placeholder {
   color: #94a3b8;
+}
+
+/* Hide the native search clear control — we render our own. */
+.dash-search input::-webkit-search-cancel-button {
+  -webkit-appearance: none;
+  appearance: none;
+}
+
+.dash-search__clear {
+  position: absolute;
+  right: 8px;
+  top: 50%;
+  transform: translateY(-50%);
+  width: 26px;
+  height: 26px;
+  border: none;
+  border-radius: 7px;
+  background: transparent;
+  color: #64748b;
+  cursor: pointer;
+  display: grid;
+  place-items: center;
+}
+
+.dash-search__clear:hover {
+  background: rgba(15, 23, 42, 0.08);
+  color: #0f172a;
+}
+
+.dash-search__panel {
+  position: absolute;
+  top: calc(100% + 8px);
+  left: 0;
+  right: 0;
+  z-index: 40;
+  background: #ffffff;
+  border: 1px solid #e2e8f0;
+  border-radius: 12px;
+  box-shadow: 0 18px 40px -12px rgba(15, 23, 42, 0.28);
+  padding: 6px;
+  max-height: 60vh;
+  overflow-y: auto;
+}
+
+.dash-search__empty {
+  margin: 0;
+  padding: 14px 12px;
+  color: #64748b;
+  font-size: 14px;
+}
+
+.dash-search__group + .dash-search__group {
+  margin-top: 4px;
+  padding-top: 4px;
+  border-top: 1px solid #f1f5f9;
+}
+
+.dash-search__group-label {
+  margin: 0;
+  padding: 8px 12px 4px;
+  font-size: 11px;
+  font-weight: 700;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+  color: #94a3b8;
+}
+
+.dash-search__item {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  width: 100%;
+  border: none;
+  background: transparent;
+  text-align: left;
+  padding: 8px 12px;
+  border-radius: 8px;
+  cursor: pointer;
+}
+
+.dash-search__item:hover,
+.dash-search__item:focus-visible {
+  background: #eff6ff;
+  outline: none;
+}
+
+.dash-search__item-main {
+  font-size: 14px;
+  font-weight: 600;
+  color: #0f172a;
+}
+
+.dash-search__item-meta {
+  font-size: 12px;
+  color: #64748b;
 }
 
 .dash-topbar__tools {
@@ -962,6 +1057,16 @@ html {
 .dash-table__action:focus-visible {
   outline: 2px solid var(--dash-accent-bright);
   outline-offset: 2px;
+}
+
+/* Completed / closed cases: Send is shown but not actionable. */
+.dash-table__action--disabled,
+.dash-table__action--disabled:hover {
+  background: #e2e8f0;
+  border-color: #e2e8f0;
+  color: #94a3b8;
+  cursor: not-allowed;
+  pointer-events: none;
 }
 
 /* Updates panel */

@@ -4,7 +4,12 @@ import { useCallback, useEffect, useRef, useState } from "react";
 
 type Notification = {
   id: string;
-  type: "case_created" | "case_submitted" | "case_shared";
+  type:
+    | "case_created"
+    | "case_submitted"
+    | "case_shared"
+    | "report_shared"
+    | "report_remark";
   caseId: string;
   caseShortCode: string;
   title: string;

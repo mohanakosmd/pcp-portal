@@ -77,8 +77,6 @@ export default function SuccessPage() {
           />
         </svg>
       </Link>
-
-      <p className="success-card__note">Need help? Contact your practice administrator.</p>
     </div>
   );
 }

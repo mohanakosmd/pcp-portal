@@ -1,10 +1,24 @@
+import { OTP_TTL_SECONDS } from "@/lib/auth";
 import { isSendGridConfigured, sendEmail } from "@/lib/sendgrid";
+
+// Human-readable OTP validity window, derived from the server TTL so the email
+// copy always matches how long the code actually lasts.
+function otpExpiryText(): string {
+  if (OTP_TTL_SECONDS % 60 === 0) {
+    const minutes = OTP_TTL_SECONDS / 60;
+    return `${minutes} minute${minutes === 1 ? "" : "s"}`;
+  }
+  return `${OTP_TTL_SECONDS} seconds`;
+}
+
+type OtpPurpose = "signup" | "login" | "reset";
 
 type OtpEmailPayload = {
   recipient: string;
   intendedFor: string;
   code: string;
   fullName: string;
+  purpose?: OtpPurpose;
 };
 
 export type SendOtpEmailResult =
@@ -30,7 +44,10 @@ export async function sendSignupOtpEmail(
 
   const result = await sendEmail({
     to: payload.recipient,
-    subject: "Your PCP Portal verification code",
+    subject:
+      payload.purpose === "reset"
+        ? "Reset your PCP Portal password"
+        : "Your PCP Portal verification code",
     text: buildText(payload),
     html: buildHtml(payload),
   });
@@ -61,13 +78,25 @@ function logOtp({ recipient, intendedFor, code, fullName }: OtpEmailPayload): vo
   );
 }
 
-function buildText({ fullName, code, intendedFor }: OtpEmailPayload): string {
+function actionLine(purpose?: OtpPurpose): string {
+  switch (purpose) {
+    case "reset":
+      return "Use this code to reset your PCP Portal password.";
+    case "login":
+      return "Use this code to finish signing in to your account.";
+    default:
+      return "Use this code to finish creating your account.";
+  }
+}
+
+function buildText({ fullName, code, intendedFor, purpose }: OtpEmailPayload): string {
   return [
     `Hi ${fullName || "there"},`,
     "",
-    `Your PCP Portal verification code is: ${code}`,
+    actionLine(purpose),
+    `Your verification code is: ${code}`,
     "",
-    "This code is valid for 10 minutes. If you didn't request it, you can ignore this email.",
+    `This code is valid for ${otpExpiryText()}. If you didn't request it, you can ignore this email.`,
     "",
     `Account: ${intendedFor}`,
     "",
@@ -75,10 +104,11 @@ function buildText({ fullName, code, intendedFor }: OtpEmailPayload): string {
   ].join("\n");
 }
 
-function buildHtml({ fullName, code, intendedFor }: OtpEmailPayload): string {
+function buildHtml({ fullName, code, intendedFor, purpose }: OtpEmailPayload): string {
   const safeName = escapeHtml(fullName || "there");
   const safeAccount = escapeHtml(intendedFor);
   const safeCode = escapeHtml(code);
+  const safeAction = escapeHtml(actionLine(purpose));
   return `<!doctype html>
 <html>
   <body style="margin:0;padding:0;background:#f1f5f9;font-family:-apple-system,BlinkMacSystemFont,Segoe UI,Roboto,Helvetica,Arial,sans-serif;">
@@ -87,7 +117,7 @@ function buildHtml({ fullName, code, intendedFor }: OtpEmailPayload): string {
       <div style="color:#64748b;font-size:14px;margin-bottom:24px;">Primary Care Physician</div>
       <p style="margin:0 0 12px;color:#0f172a;font-size:16px;">Hi ${safeName},</p>
       <p style="margin:0 0 18px;color:#475569;font-size:15px;line-height:1.5;">
-        Use this verification code to finish creating your account. The code is valid for 10 minutes.
+        ${safeAction} The code is valid for ${otpExpiryText()}.
       </p>
       <div style="font-family:Menlo,Consolas,monospace;font-size:32px;font-weight:700;letter-spacing:0.18em;color:#003672;background:#eff6ff;border:1px solid #bfdbfe;border-radius:10px;padding:18px 0;text-align:center;margin:0 0 18px;">
         ${safeCode}

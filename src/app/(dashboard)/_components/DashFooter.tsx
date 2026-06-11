@@ -7,7 +7,7 @@ export function DashFooter() {
           <span className="dash-page-footer__sep" aria-hidden="true" />
           <span
             className="dash-page-footer__hipaa"
-            aria-label="HIPAA compliant and encrypted"
+            aria-label="HIPAA compliant and security"
           >
             <svg
               className="dash-page-footer__lock"
@@ -25,7 +25,7 @@ export function DashFooter() {
               />
               <path d="M12 14v2" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" />
             </svg>
-            HIPAA Compliant &amp; Encrypted
+            HIPAA Compliant &amp; Security
           </span>
           <span className="dash-page-footer__sep" aria-hidden="true" />
           <span className="dash-page-footer__note">

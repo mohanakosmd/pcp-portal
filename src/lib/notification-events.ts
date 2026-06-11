@@ -126,6 +126,14 @@ function appUrl(path: string): string {
   return base.replace(/\/+$/, "") + path;
 }
 
+// GI specialists are sent to the GI portal (they have no PCP-portal account).
+const GI_PORTAL_URL =
+  process.env.NEXT_PUBLIC_GI_PORTAL_URL?.trim() || "https://gi.aigicare.com";
+
+function giUrl(path: string): string {
+  return GI_PORTAL_URL.replace(/\/+$/, "") + path;
+}
+
 // ----- Event emitters --------------------------------------------------------
 
 export async function emitCaseCreated(opts: {
@@ -226,7 +234,7 @@ export async function emitCaseShared(opts: {
   // GI inbound — only meaningful once a GI portal exists, but we persist
   // the notification doc anyway so it's ready then. Email is sent now.
   const giTitle = `New case shared with you: #${opts.caseShortCode}`;
-  const giBody = `${pcpName} has shared a case for your review.`;
+  const giBody = `${pcpName} has shared a case with you for review.`;
   await emitOne({
     type: "case_shared",
     caseId: opts.caseId,
@@ -242,7 +250,53 @@ export async function emitCaseShared(opts: {
       heading: giTitle,
       body: giBody,
       ctaLabel: "Review case",
-      ctaUrl: appUrl(`/cases/${encodeURIComponent(opts.caseId)}`),
+      ctaUrl: giUrl(`/case-review`),
+    }),
+  });
+}
+
+// Fired when a PCP posts a remark on a GI-shared report. Notifies the GI
+// specialist the report was shared with (in-app + best-effort email).
+export async function emitReportRemarkAdded(opts: {
+  caseId: string;
+  caseShortCode: string;
+  reportName: string;
+  giUserId: string;
+  pcpName: string;
+  remarkBody: string;
+}): Promise<void> {
+  if (!opts.giUserId) {
+    console.warn("[notify report_remark] report has no GI specialist; skipping");
+    return;
+  }
+  const gi = await readGi(opts.giUserId);
+  if (!gi) {
+    console.warn(`[notify report_remark] GI user ${opts.giUserId} not found; skipping`);
+    return;
+  }
+  const giName = gi.name;
+  const pcpName = opts.pcpName.trim() || "A PCP";
+  const reportLabel = opts.reportName.trim() || `Case #${opts.caseShortCode}`;
+  const snippet =
+    opts.remarkBody.length > 160 ? `${opts.remarkBody.slice(0, 160)}…` : opts.remarkBody;
+  const title = `New remark on ${reportLabel}`;
+  const body = `${pcpName} added a remark on case #${opts.caseShortCode}: "${snippet}"`;
+  await emitOne({
+    type: "report_remark",
+    caseId: opts.caseId,
+    caseShortCode: opts.caseShortCode,
+    title,
+    body,
+    recipientUserId: opts.giUserId,
+    recipientType: "gi",
+    recipientEmail: gi.email,
+    emailSubject: title,
+    emailHtml: pcpEmailHtml({
+      greetingName: giName,
+      heading: title,
+      body,
+      ctaLabel: "View the report",
+      ctaUrl: giUrl(`/case-review`),
     }),
   });
 }

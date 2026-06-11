@@ -12,16 +12,17 @@ import {
   type InsuranceCardRef,
 } from "@/lib/cases";
 import { getDocument, nowIso, upsertDocument } from "@/lib/firestore-rest";
+import { isUsStateCode } from "@/lib/us-area-codes";
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
 
 type AboutBody = Partial<{
   fullLegalName: unknown;
-  age: unknown;
   gender: unknown;
   dateOfBirth: unknown;
   address: unknown;
+  state: unknown;
   mobile: unknown;
   email: unknown;
   insuranceCarrier: unknown;
@@ -44,13 +45,6 @@ function asGender(v: unknown): GenderEnum | null {
     : null;
 }
 
-function asInt(v: unknown, min: number, max: number): number | null {
-  const n = typeof v === "string" ? Number(v) : typeof v === "number" ? v : NaN;
-  if (!Number.isFinite(n)) return null;
-  const i = Math.trunc(n);
-  if (i < min || i > max) return null;
-  return i;
-}
 
 function asInsuranceCardRef(v: unknown): InsuranceCardRef | null {
   if (!v || typeof v !== "object") return null;
@@ -87,10 +81,10 @@ export async function PATCH(
     const prev = (existing?.data ?? {}) as Partial<CaseAboutDoc>;
 
     const fullLegalName = asStr(body.fullLegalName, 120) ?? prev.fullLegalName ?? null;
-    const age = asInt(body.age, 0, 120) ?? prev.age ?? null;
     const gender = asGender(body.gender) ?? prev.gender ?? null;
     const dateOfBirth = asStr(body.dateOfBirth, 12) ?? prev.dateOfBirth ?? null;
     const address = asStr(body.address, 240) ?? prev.address ?? null;
+    const state = (isUsStateCode(body.state) ? body.state : null) ?? prev.state ?? null;
     const mobile = asStr(body.mobile, 30) ?? prev.mobile ?? null;
     const email = (asStr(body.email, 200) ?? prev.email ?? "").toLowerCase() || null;
     const insuranceCarrier = asStr(body.insuranceCarrier, 80) ?? prev.insuranceCarrier ?? null;
@@ -113,10 +107,10 @@ export async function PATCH(
     const now = nowIso();
     const next: CaseAboutDoc = {
       fullLegalName: fullLegalName ?? "",
-      age,
       gender,
       dateOfBirth,
       address,
+      state,
       mobile: mobile ?? "",
       email: email ?? "",
       insuranceCarrier,

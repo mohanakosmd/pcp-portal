@@ -116,6 +116,37 @@
   border-spacing: 0;
 }
 
+.reports-filter-banner {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  flex-wrap: wrap;
+  margin: 0 0 14px;
+  padding: 10px 16px;
+  border: 1px solid #bfdbfe;
+  border-radius: 10px;
+  background: #eff6ff;
+  color: #1e3a8a;
+  font-size: 14px;
+  font-weight: 500;
+}
+
+.reports-filter-banner__clear {
+  border: none;
+  background: transparent;
+  color: #1d4ed8;
+  font: inherit;
+  font-weight: 600;
+  cursor: pointer;
+  padding: 2px 6px;
+  border-radius: 6px;
+}
+
+.reports-filter-banner__clear:hover {
+  background: rgba(29, 78, 216, 0.1);
+}
+
 .reports-table-wrap {
   width: 100%;
   overflow-x: auto;
@@ -236,6 +267,45 @@
   border: 1px solid rgba(34, 197, 94, 0.35);
 }
 
+/* Remarks column badge — "New Remark" (has remarks) vs "None". */
+.reports-remark-flag {
+  display: inline-flex;
+  align-items: center;
+  gap: 7px;
+  padding: 5px 12px;
+  border-radius: 999px;
+  font: inherit;
+  font-size: 12px;
+  font-weight: 700;
+  white-space: nowrap;
+}
+
+.reports-remark-flag--new {
+  color: #1d4ed8;
+  background: #eff6ff;
+  border: 1px solid #bfdbfe;
+  cursor: pointer;
+}
+
+.reports-remark-flag--new:hover {
+  background: #dbeafe;
+  border-color: #93c5fd;
+}
+
+.reports-remark-flag__dot {
+  width: 8px;
+  height: 8px;
+  border-radius: 999px;
+  background: #3b82f6;
+  flex: 0 0 auto;
+}
+
+.reports-remark-flag--none {
+  color: #94a3b8;
+  background: #f1f5f9;
+  border: 1px solid #e2e8f0;
+}
+
 .reports-note {
   margin-top: 14px;
   padding: 10px 12px;
@@ -268,8 +338,8 @@
 
 .reports-modal__dialog {
   position: relative;
-  width: min(100%, 680px);
-  max-height: min(88vh, 760px);
+  width: min(96vw, 920px);
+  max-height: min(92vh, 880px);
   overflow: auto;
   border-radius: 14px;
   border: 1px solid #dbe2ef;
@@ -313,6 +383,7 @@
   color: #334155;
   font-size: 14px;
   line-height: 1.55;
+  overflow-x: hidden;
 }
 
 .reports-modal__body p {
@@ -368,6 +439,54 @@
   cursor: not-allowed;
 }
 
+/* GI has already replied: the Submit button looks inactive but stays
+   clickable so the click can surface the "already done by GI" toast. */
+.reports-row-share--inactive,
+.reports-row-share--inactive:hover {
+  background: #f1f5f9;
+  border-color: #e2e8f0;
+  color: #94a3b8;
+  cursor: not-allowed;
+}
+
+/* Transient toast (remark submitted / already done by GI). */
+.reports-toast {
+  position: fixed;
+  top: max(20px, env(safe-area-inset-top, 0px));
+  right: max(20px, env(safe-area-inset-right, 0px));
+  z-index: 10000;
+  max-width: min(360px, calc(100vw - 32px));
+  padding: 13px 16px;
+  margin: 0;
+  background: #0f3d6e;
+  color: #fff;
+  border-radius: 12px;
+  box-shadow: 0 12px 40px rgba(15, 23, 42, 0.3);
+  transform: translate3d(calc(100% + 32px), 0, 0);
+  opacity: 0;
+  visibility: hidden;
+  pointer-events: none;
+  transition: transform 0.3s ease, opacity 0.3s ease, visibility 0.3s ease;
+}
+
+.reports-toast--show {
+  transform: translate3d(0, 0, 0);
+  opacity: 1;
+  visibility: visible;
+}
+
+.reports-toast--leave {
+  opacity: 0;
+  transform: translate3d(calc(100% + 32px), 0, 0);
+}
+
+.reports-toast__text {
+  margin: 0;
+  font-size: 14px;
+  font-weight: 500;
+  line-height: 1.45;
+}
+
 /* Previously-submitted remarks for the report. */
 .reports-remark-list {
   list-style: none;
@@ -404,6 +523,35 @@
   color: #94a3b8;
 }
 
+.reports-remark-item__head .reports-remark-item__author {
+  display: inline-flex;
+  align-items: baseline;
+  gap: 6px;
+}
+
+/* PCP vs GI tag so both sides' remarks read clearly in one thread. */
+.reports-remark-item__head .reports-remark-item__role {
+  font-size: 10px;
+  font-weight: 700;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+  padding: 1px 6px;
+  border-radius: 999px;
+  border: 1px solid #e2e8f0;
+}
+
+.reports-remark-item__head .reports-remark-item__role--gi {
+  color: #1d4ed8;
+  background: #eff6ff;
+  border-color: #bfdbfe;
+}
+
+.reports-remark-item__head .reports-remark-item__role--pcp {
+  color: #334155;
+  background: #f1f5f9;
+  border-color: #e2e8f0;
+}
+
 .reports-remark-item__body {
   margin: 0;
   font-size: 13px;
@@ -426,6 +574,7 @@
 
 .reports-modal-report {
   display: grid;
+  grid-template-columns: minmax(0, 1fr);
   gap: 14px;
 }
 
@@ -460,6 +609,7 @@
 }
 
 .reports-modal-report__section {
+  min-width: 0;
   border: 1px solid #e2e8f0;
   border-radius: 10px;
   background: #fff;
@@ -477,12 +627,45 @@
 
 .reports-modal-report__section p {
   margin: 0;
+  overflow-wrap: break-word;
 }
 
 .reports-modal-report__section ul,
 .reports-modal-report__section ol {
   margin: 0;
   padding-left: 20px;
+}
+
+/* Two-column grid for longer pick-lists (tests, procedures, plan files) so the
+   report modal doesn't waste horizontal space. Items fill left-to-right, row by
+   row. Custom bullets because grid items drop the default list marker. Falls
+   back to one column on narrow viewports. */
+.reports-modal-report__section ul.reports-list--two-col {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 2px 32px;
+  padding-left: 4px;
+  list-style: none;
+}
+
+.reports-modal-report__section ul.reports-list--two-col li {
+  position: relative;
+  min-width: 0;
+  padding-left: 16px;
+  overflow-wrap: break-word;
+}
+
+.reports-modal-report__section ul.reports-list--two-col li::before {
+  content: "•";
+  position: absolute;
+  left: 2px;
+  color: #475569;
+}
+
+@media (max-width: 560px) {
+  .reports-modal-report__section ul.reports-list--two-col {
+    grid-template-columns: 1fr;
+  }
 }
 
 .reports-symptom-chips {
@@ -495,6 +678,7 @@
 .reports-symptom-chip {
   display: inline-flex;
   align-items: center;
+  max-width: 100%;
   padding: 6px 12px;
   border-radius: 999px;
   background: #eff6ff;
@@ -503,7 +687,8 @@
   font-size: 12px;
   font-weight: 700;
   line-height: 1.2;
-  white-space: nowrap;
+  white-space: normal;
+  overflow-wrap: break-word;
 }
 
 .reports-priority-inline {

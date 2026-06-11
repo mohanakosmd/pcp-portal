@@ -3,7 +3,6 @@ import { NextResponse } from "next/server";
 import { generateOtp, isValidEmail, normalizeEmail, otpExpiresAt } from "@/lib/auth";
 import { PCP_USERS_COLLECTION } from "@/lib/firebase";
 import {
-  addDocument,
   getDocument,
   nowIso,
   queryDocuments,
@@ -11,10 +10,17 @@ import {
 } from "@/lib/firestore-rest";
 import { sendSignupOtpEmail } from "@/lib/otp-email";
 import { checkUniqueness, emailKey } from "@/lib/pcp-uniqueness";
-import { PCP_PORTAL, SIGNUP_REQUESTS_COLLECTION } from "@/lib/signup-requests";
+import {
+  PCP_PORTAL,
+  PCP_SIGNUP_OTP_COLLECTION,
+  SIGNUP_REQUESTS_COLLECTION,
+} from "@/lib/signup-requests";
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
+
+const ACCOUNT_EXISTS_MESSAGE =
+  "An account with this email already exists. Please log in instead.";
 
 type SignupBody = {
   name?: unknown;
@@ -43,24 +49,19 @@ export async function POST(request: Request) {
   if (!mobile) return NextResponse.json({ error: "Mobile number is required." }, { status: 400 });
 
   const email = normalizeEmail(rawEmail);
-  // pcp_users is keyed by emailKey; signup_requests now uses auto-generated ids.
+  // pcp_users and the staging collection are both keyed by emailKey.
   const userKey = emailKey(email);
 
   try {
-    // Already a real, verified account? Send them to login.
+    // 1. A real account already exists for this email? Send them to login.
     const existingUser = await getDocument(PCP_USERS_COLLECTION, userKey);
-    if (existingUser && existingUser.data.verified === true) {
-      return NextResponse.json(
-        { error: "An account with this email already exists. Please log in instead." },
-        { status: 409 }
-      );
+    if (existingUser) {
+      return NextResponse.json({ error: ACCOUNT_EXISTS_MESSAGE }, { status: 409 });
     }
 
-    // Reuse an in-flight PCP signup request for this email if one exists, so
-    // re-requesting a code refreshes the same record instead of piling up
-    // duplicate auto-id docs. The collection is shared with the GI portal, so
-    // filter by portal === "pcp" (querying on email keeps it to one filter and
-    // avoids needing a composite index).
+    // 2. An existing request in the shared collection? The collection is shared
+    // with the GI portal, so filter by portal === "pcp" (querying on email
+    // keeps it to a single filter and avoids a composite index).
     const sameEmail = await queryDocuments(
       SIGNUP_REQUESTS_COLLECTION,
       [{ field: "email", value: email }],
@@ -68,15 +69,17 @@ export async function POST(request: Request) {
     );
     const existingRequest = sameEmail.find((d) => d.data.portal === PCP_PORTAL) ?? null;
 
-    // Already approved request whose user is being provisioned?
+    // An already-approved request means the account exists (or is being
+    // provisioned) — treat as "already exists".
     if (existingRequest && existingRequest.data.status === "approved") {
-      return NextResponse.json(
-        { error: "This registration was already approved. Please log in." },
-        { status: 409 }
-      );
+      return NextResponse.json({ error: ACCOUNT_EXISTS_MESSAGE }, { status: 409 });
     }
+    // A *pending* request is allowed to proceed: re-verifying the OTP will
+    // refresh its details (handled in the verify route).
 
-    // Soft pre-check (the atomic claim happens when the admin creates the user).
+    // 3. Soft pre-check against the uniqueness indexes (the atomic claim happens
+    // when the admin provisions the user). Catches an email/phone already owned
+    // by another provisioned account.
     const conflict = await checkUniqueness({ email, phone: mobile, selfUserId: userKey });
     if (conflict) {
       const fieldLabel = conflict.field === "email" ? "email" : "phone number";
@@ -86,46 +89,26 @@ export async function POST(request: Request) {
       );
     }
 
+    // 4. Stage the attempt with a fresh OTP. Nothing is written to
+    // signup_requests yet — that only happens once the code is verified, so
+    // unverified attempts never reach the admin queue. Re-requesting a code for
+    // the same email refreshes this single staged doc.
     const code = generateOtp();
     const expiresAt = otpExpiresAt();
     const now = nowIso();
 
-    let requestId: string;
-    if (existingRequest) {
-      // Refresh the OTP on the existing record; preserve created_at, identity,
-      // verification state and any password hash already captured.
-      requestId = existingRequest.id;
-      await upsertDocument(SIGNUP_REQUESTS_COLLECTION, requestId, {
-        fullName: name,
-        phone: mobile,
-        otpCode: code,
-        otpExpiresAt: expiresAt.toISOString(),
-        otpAttempts: 0,
-        updatedAt: now,
-      });
-    } else {
-      // New request — let Firestore generate the document id (GI format).
-      const created = await addDocument(SIGNUP_REQUESTS_COLLECTION, {
-        // Canonical fields shared with the GI portal:
-        fullName: name,
-        email,
-        phone: mobile,
-        portal: PCP_PORTAL,
-        status: "pending",
-        created_at: now,
-        // PCP-specific OTP machinery (no password is captured here):
-        type: "pcp_user",
-        emailVerified: false,
-        emailVerifiedAt: null,
-        otpCode: code,
-        otpExpiresAt: expiresAt.toISOString(),
-        otpAttempts: 0,
-        updatedAt: now,
-      });
-      requestId = created.id;
-    }
+    await upsertDocument(PCP_SIGNUP_OTP_COLLECTION, userKey, {
+      fullName: name,
+      email,
+      phone: mobile,
+      otpCode: code,
+      otpExpiresAt: expiresAt.toISOString(),
+      otpAttempts: 0,
+      createdAt: now,
+      updatedAt: now,
+    });
 
-    const recipient = process.env.SIGNUP_OTP_RECIPIENT?.trim() || email;
+    const recipient = email;
     const delivery = await sendSignupOtpEmail({
       recipient,
       intendedFor: email,
@@ -135,8 +118,8 @@ export async function POST(request: Request) {
 
     return NextResponse.json({
       ok: true,
-      userId: requestId,
-      requestId,
+      userId: userKey,
+      requestId: userKey,
       routedTo: recipient,
       expiresAt: expiresAt.toISOString(),
       emailDelivered: delivery.delivered,

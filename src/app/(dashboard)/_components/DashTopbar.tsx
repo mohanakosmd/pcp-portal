@@ -1,3 +1,4 @@
+import { DashSearch } from "./DashSearch";
 import { NotificationBell } from "./NotificationBell";
 
 function computeInitials(name: string, fallbackFromEmail: string): string {
@@ -42,13 +43,7 @@ export function DashTopbar({ name = "", email = "" }: { name?: string; email?: s
         </svg>
       </button>
 
-      <div className="dash-search">
-        <svg width="18" height="18" viewBox="0 0 24 24" fill="none" aria-hidden="true">
-          <circle cx="11" cy="11" r="6.5" stroke="currentColor" strokeWidth="1.8" />
-          <path d="M16 16L20 20" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" />
-        </svg>
-        <input type="search" placeholder="Search Your Request" autoComplete="off" />
-      </div>
+      <DashSearch />
 
       <div className="dash-topbar__tools">
         <NotificationBell />
