@@ -17,12 +17,19 @@ export const dynamic = "force-dynamic";
 
 type HealthBody = Partial<{
   inboxMessage: unknown;
+  bmi: unknown;
   allergies: unknown;
   currentMedications: unknown;
   existingConditions: unknown;
+  pastSurgicalHistory: unknown;
+  socialHistory: unknown;
   recentTestsOrProcedures: unknown;
   familyHistory: unknown;
   lifestyleNotes: unknown;
+  primaryCarePhysician: unknown;
+  pcpPhoneFax: unknown;
+  pharmacyInformation: unknown;
+  pharmacyPhoneFax: unknown;
   urgencyLevel: unknown;
 }>;
 
@@ -53,33 +60,89 @@ export async function PATCH(
     return NextResponse.json({ error: "Invalid JSON body." }, { status: 400 });
   }
 
+  // BMI is optional, but when provided it must be a plausible number. Matches
+  // the client-side rule so the message is the same on both sides.
+  if (typeof body.bmi === "string" && body.bmi.trim()) {
+    const n = Number(body.bmi.trim());
+    if (!Number.isFinite(n) || n < 10 || n > 80) {
+      return NextResponse.json(
+        { error: "Enter a valid BMI between 10 and 80." },
+        { status: 400 }
+      );
+    }
+  }
+
   try {
     await readCaseOwnedBy(caseId, userId);
 
     const existing = await getDocument(`${PCP_CASES_COLLECTION}/${caseId}/health`, "data");
     const prev = (existing?.data ?? {}) as Partial<CaseHealthDoc>;
 
-    const inboxMessage = asStr(body.inboxMessage, 4000) ?? prev.inboxMessage ?? "";
-    const allergies = asStr(body.allergies, 1000) ?? prev.allergies ?? null;
-    const currentMedications =
-      asStr(body.currentMedications, 1000) ?? prev.currentMedications ?? null;
-    const existingConditions =
-      asStr(body.existingConditions, 1000) ?? prev.existingConditions ?? null;
-    const recentTestsOrProcedures =
-      asStr(body.recentTestsOrProcedures, 1000) ?? prev.recentTestsOrProcedures ?? null;
-    const familyHistory = asStr(body.familyHistory, 1000) ?? prev.familyHistory ?? null;
-    const lifestyleNotes = asStr(body.lifestyleNotes, 1000) ?? prev.lifestyleNotes ?? null;
-    const urgencyLevel = asUrgency(body.urgencyLevel) ?? prev.urgencyLevel ?? null;
+    // A key that's present in the body (even as "") is an explicit edit — so
+    // clearing a field works. Absent keys keep the previous value (callers like
+    // create-case only send a subset).
+    const has = (k: keyof HealthBody) =>
+      Object.prototype.hasOwnProperty.call(body, k);
+    const inboxMessage = has("inboxMessage")
+      ? asStr(body.inboxMessage, 4000) ?? ""
+      : prev.inboxMessage ?? "";
+    const bmi = has("bmi") ? asStr(body.bmi, 20) : prev.bmi ?? null;
+    const allergies = has("allergies")
+      ? asStr(body.allergies, 1000)
+      : prev.allergies ?? null;
+    const currentMedications = has("currentMedications")
+      ? asStr(body.currentMedications, 1000)
+      : prev.currentMedications ?? null;
+    const existingConditions = has("existingConditions")
+      ? asStr(body.existingConditions, 1000)
+      : prev.existingConditions ?? null;
+    const pastSurgicalHistory = has("pastSurgicalHistory")
+      ? asStr(body.pastSurgicalHistory, 1000)
+      : prev.pastSurgicalHistory ?? null;
+    const socialHistory = has("socialHistory")
+      ? asStr(body.socialHistory, 1000)
+      : prev.socialHistory ?? null;
+    const recentTestsOrProcedures = has("recentTestsOrProcedures")
+      ? asStr(body.recentTestsOrProcedures, 1000)
+      : prev.recentTestsOrProcedures ?? null;
+    const familyHistory = has("familyHistory")
+      ? asStr(body.familyHistory, 1000)
+      : prev.familyHistory ?? null;
+    const lifestyleNotes = has("lifestyleNotes")
+      ? asStr(body.lifestyleNotes, 1000)
+      : prev.lifestyleNotes ?? null;
+    const primaryCarePhysician = has("primaryCarePhysician")
+      ? asStr(body.primaryCarePhysician, 200)
+      : prev.primaryCarePhysician ?? null;
+    const pcpPhoneFax = has("pcpPhoneFax")
+      ? asStr(body.pcpPhoneFax, 200)
+      : prev.pcpPhoneFax ?? null;
+    const pharmacyInformation = has("pharmacyInformation")
+      ? asStr(body.pharmacyInformation, 500)
+      : prev.pharmacyInformation ?? null;
+    const pharmacyPhoneFax = has("pharmacyPhoneFax")
+      ? asStr(body.pharmacyPhoneFax, 200)
+      : prev.pharmacyPhoneFax ?? null;
+    const urgencyLevel = has("urgencyLevel")
+      ? asUrgency(body.urgencyLevel)
+      : prev.urgencyLevel ?? null;
 
     const now = nowIso();
     const next: CaseHealthDoc = {
       inboxMessage,
+      bmi,
       allergies,
       currentMedications,
       existingConditions,
+      pastSurgicalHistory,
+      socialHistory,
       recentTestsOrProcedures,
       familyHistory,
       lifestyleNotes,
+      primaryCarePhysician,
+      pcpPhoneFax,
+      pharmacyInformation,
+      pharmacyPhoneFax,
       urgencyLevel,
       updatedAt: now,
       updatedByUserId: userId,

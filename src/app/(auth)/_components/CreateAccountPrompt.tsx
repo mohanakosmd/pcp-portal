@@ -35,6 +35,18 @@ function isValidIntlPhone(value: string): boolean {
   return digits.length >= 6 && digits.length <= 15;
 }
 
+// Mirrors isStrongPassword() in @/lib/auth so the client blocks weak passwords
+// before hitting the server (which enforces the same policy).
+function isStrongPassword(value: string): boolean {
+  return (
+    value.length >= 8 &&
+    /[a-z]/.test(value) &&
+    /[A-Z]/.test(value) &&
+    /[0-9]/.test(value) &&
+    /[^A-Za-z0-9]/.test(value)
+  );
+}
+
 type ToastState = {
   message: string;
   state: "show" | "leave" | "hidden";
@@ -81,6 +93,9 @@ export function CreateAccountPrompt() {
   const [name, setName] = useState("");
   const [email, setEmail] = useState("");
   const [mobile, setMobile] = useState("");
+  const [password, setPassword] = useState("");
+  const [confirmPassword, setConfirmPassword] = useState("");
+  const [showPassword, setShowPassword] = useState(false);
   const [country, setCountry] = useState<Country>(DEFAULT_COUNTRY);
   const [countryOpen, setCountryOpen] = useState(false);
   const [countryQuery, setCountryQuery] = useState("");
@@ -182,6 +197,9 @@ export function CreateAccountPrompt() {
     setName("");
     setEmail("");
     setMobile("");
+    setPassword("");
+    setConfirmPassword("");
+    setShowPassword(false);
     setNpiFirst("");
     setNpiLast("");
     setNpiState("");
@@ -294,11 +312,6 @@ export function CreateAccountPrompt() {
     setStep("request");
   };
 
-  const skipNpi = () => {
-    setRequestError("");
-    setStep("request");
-  };
-
   // --- Step 2: account details + OTP ----------------------------------------
 
   const handleRequestSubmit = async (event: React.FormEvent<HTMLFormElement>) => {
@@ -316,6 +329,16 @@ export function CreateAccountPrompt() {
       );
       return;
     }
+    if (!isStrongPassword(password)) {
+      setRequestError(
+        "Password must be at least 8 characters and include uppercase, lowercase, number, and special character."
+      );
+      return;
+    }
+    if (password !== confirmPassword) {
+      setRequestError("Passwords do not match.");
+      return;
+    }
     setSubmitting(true);
     setRequestError("");
     try {
@@ -323,6 +346,7 @@ export function CreateAccountPrompt() {
         name,
         email,
         mobile: `${country.dial} ${mobile}`,
+        password,
       });
       if (!ok) {
         setRequestError(typeof data.error === "string" ? data.error : "Sign-up failed.");
@@ -403,6 +427,7 @@ export function CreateAccountPrompt() {
         name,
         email,
         mobile: `${country.dial} ${mobile}`,
+        password,
       });
       if (!ok) {
         setOtpError(typeof data.error === "string" ? data.error : "Could not resend code.");
@@ -422,7 +447,7 @@ export function CreateAccountPrompt() {
   const canResendOtp = secondsLeft <= 0;
 
   const modalTitle =
-    step === "pending" ? "Registration submitted" : "Create New Account";
+    step === "pending" ? "Account created" : "Create New Account";
 
   const toastClassName = [
     "otp-toast",
@@ -604,10 +629,6 @@ export function CreateAccountPrompt() {
                 </p>
               )
             ) : null}
-
-            <button type="button" className="access-skip-link" onClick={skipNpi}>
-              Skip — I&apos;ll enter my details manually
-            </button>
           </div>
 
           {/* Step 2 — account details */}
@@ -756,6 +777,81 @@ export function CreateAccountPrompt() {
                   ) : null}
                 </div>
               </div>
+              <div>
+                <label className="field-label" htmlFor="access-password">
+                  Password
+                </label>
+                <div className="input-modern input-modern--no-icon input-modern--with-toggle">
+                  <input
+                    id="access-password"
+                    name="password"
+                    type={showPassword ? "text" : "password"}
+                    autoComplete="new-password"
+                    placeholder="Create a password"
+                    value={password}
+                    onChange={(event) => setPassword(event.target.value)}
+                    required
+                  />
+                  <button
+                    type="button"
+                    className="password-toggle"
+                    aria-label={showPassword ? "Hide password" : "Show password"}
+                    aria-pressed={showPassword}
+                    onClick={() => setShowPassword((v) => !v)}
+                  >
+                    {showPassword ? (
+                      <svg width="18" height="18" viewBox="0 0 24 24" fill="none" aria-hidden="true">
+                        <path d="M3 3L21 21" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" />
+                        <path
+                          d="M10.58 10.58C10.21 10.95 10 11.46 10 12C10 13.1 10.9 14 12 14C12.54 14 13.05 13.79 13.42 13.42"
+                          stroke="currentColor"
+                          strokeWidth="1.8"
+                          strokeLinecap="round"
+                          strokeLinejoin="round"
+                        />
+                        <path
+                          d="M9.88 5.09C10.56 4.86 11.27 4.75 12 4.75C16.5 4.75 20.27 8.24 21.25 12C20.86 13.49 20.02 14.83 18.85 15.84M14.12 18.91C13.44 19.14 12.73 19.25 12 19.25C7.5 19.25 3.73 15.76 2.75 12C3.23 10.17 4.39 8.58 5.97 7.47"
+                          stroke="currentColor"
+                          strokeWidth="1.8"
+                          strokeLinecap="round"
+                          strokeLinejoin="round"
+                        />
+                      </svg>
+                    ) : (
+                      <svg width="18" height="18" viewBox="0 0 24 24" fill="none" aria-hidden="true">
+                        <path
+                          d="M2.75 12C3.73 8.24 7.5 4.75 12 4.75C16.5 4.75 20.27 8.24 21.25 12C20.27 15.76 16.5 19.25 12 19.25C7.5 19.25 3.73 15.76 2.75 12Z"
+                          stroke="currentColor"
+                          strokeWidth="1.8"
+                          strokeLinecap="round"
+                          strokeLinejoin="round"
+                        />
+                        <circle cx="12" cy="12" r="3" stroke="currentColor" strokeWidth="1.8" />
+                      </svg>
+                    )}
+                  </button>
+                </div>
+                <p className="section-hint section-hint--left" style={{ margin: "4px 0 0" }}>
+                  At least 8 characters with uppercase, lowercase, number, and special character.
+                </p>
+              </div>
+              <div>
+                <label className="field-label" htmlFor="access-confirm-password">
+                  Confirm password
+                </label>
+                <div className="input-modern input-modern--no-icon">
+                  <input
+                    id="access-confirm-password"
+                    name="confirmPassword"
+                    type={showPassword ? "text" : "password"}
+                    autoComplete="new-password"
+                    placeholder="Re-enter your password"
+                    value={confirmPassword}
+                    onChange={(event) => setConfirmPassword(event.target.value)}
+                    required
+                  />
+                </div>
+              </div>
               {requestError ? (
                 <p
                   className="section-hint section-hint--left"
@@ -872,15 +968,14 @@ export function CreateAccountPrompt() {
                   />
                 </svg>
               </div>
-              <h3 className="section-title section-title--left">Registration submitted</h3>
+              <h3 className="section-title section-title--left">Account created</h3>
               <p className="section-hint section-hint--left">
-                Thanks, {name || "there"}! Your email is verified and your registration for{" "}
-                <span className="otp-email">{email || "your email"}</span> is now pending admin
-                approval. You&apos;ll be able to log in once an administrator approves your
-                account.
+                Thanks, {name || "there"}! Your email is verified and your account for{" "}
+                <span className="otp-email">{email || "your email"}</span> is ready. You can now
+                log in with your email and password.
               </p>
               <button className="btn-primary" type="button" onClick={closeModal}>
-                Done
+                Go to login
               </button>
             </div>
           </div>

@@ -12,7 +12,9 @@ import {
   type InsuranceCardRef,
 } from "@/lib/cases";
 import { getDocument, nowIso, upsertDocument } from "@/lib/firestore-rest";
-import { isUsStateCode } from "@/lib/us-area-codes";
+import { ageFromDob } from "@/lib/age";
+import { isValidUsPhone } from "@/lib/phone";
+import { isUsStateCode, phoneStateMismatch, usStateName } from "@/lib/us-area-codes";
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
@@ -46,6 +48,50 @@ function asGender(v: unknown): GenderEnum | null {
 }
 
 
+/**
+ * Returns a specific validation message for the first malformed field present
+ * in the body, or null if everything provided is valid. Only validates fields
+ * that are actually present + non-empty (this route is a partial PATCH, used by
+ * both "Save draft" and "Submit"), so it rejects bad values with a precise
+ * reason instead of silently coercing them to null.
+ */
+function validateAbout(body: AboutBody): string | null {
+  const provided = (v: unknown): string | null =>
+    typeof v === "string" && v.trim() ? v.trim() : null;
+
+  const email = provided(body.email);
+  if (email && !/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email)) {
+    return "Enter a valid email address.";
+  }
+
+  const gender = provided(body.gender);
+  if (gender && !(GENDER_VALUES as string[]).includes(gender)) {
+    return "Select a valid gender.";
+  }
+
+  const state = provided(body.state);
+  if (state && !isUsStateCode(state)) {
+    return "Select a valid US state.";
+  }
+
+  const dob = provided(body.dateOfBirth);
+  if (dob && ageFromDob(dob) == null) {
+    return "Enter a valid date of birth (age must be 0–120).";
+  }
+
+  const mobile = provided(body.mobile);
+  if (mobile) {
+    if (!isValidUsPhone(mobile)) return "Enter a valid US phone number.";
+    if (state && isUsStateCode(state) && phoneStateMismatch(mobile, state)) {
+      return `This phone's area code isn't in ${usStateName(state)} — use a ${usStateName(
+        state
+      )} number or change the state.`;
+    }
+  }
+
+  return null;
+}
+
 function asInsuranceCardRef(v: unknown): InsuranceCardRef | null {
   if (!v || typeof v !== "object") return null;
   const o = v as Record<string, unknown>;
@@ -72,6 +118,11 @@ export async function PATCH(
     body = (await request.json()) as AboutBody;
   } catch {
     return NextResponse.json({ error: "Invalid JSON body." }, { status: 400 });
+  }
+
+  const validationError = validateAbout(body);
+  if (validationError) {
+    return NextResponse.json({ error: validationError }, { status: 400 });
   }
 
   try {

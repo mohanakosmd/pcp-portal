@@ -2,19 +2,13 @@ import { NextResponse } from "next/server";
 
 import { PCP_USERS_COLLECTION } from "@/lib/firebase";
 import {
-  addDocument,
   deleteDocument,
   getDocument,
   nowIso,
-  queryDocuments,
   upsertDocument,
 } from "@/lib/firestore-rest";
-import { emailKey } from "@/lib/pcp-uniqueness";
-import {
-  PCP_PORTAL,
-  PCP_SIGNUP_OTP_COLLECTION,
-  SIGNUP_REQUESTS_COLLECTION,
-} from "@/lib/signup-requests";
+import { claimUniqueness, emailKey } from "@/lib/pcp-uniqueness";
+import { PCP_SIGNUP_OTP_COLLECTION } from "@/lib/signup-requests";
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
@@ -83,77 +77,57 @@ export async function POST(request: Request) {
       return NextResponse.json({ error: "Incorrect code." }, { status: 400 });
     }
 
-    // OTP correct — materialize the request into the shared collection now.
+    // OTP correct — create the pcp_users record directly. There is no admin
+    // approval step: once the email is verified the provider becomes a real,
+    // login-ready pcp_users account.
     const email = typeof data.email === "string" ? data.email : "";
     const fullName = typeof data.fullName === "string" ? data.fullName : "";
     const phone = typeof data.phone === "string" ? data.phone : "";
+    const passwordHash = typeof data.passwordHash === "string" ? data.passwordHash : "";
     const userKey = emailKey(email);
     const now = nowIso();
 
-    // Guard against an account being provisioned while the user was typing.
+    // Guard against a verified account already existing (e.g. a concurrent
+    // verify of the same email).
     const existingUser = await getDocument(PCP_USERS_COLLECTION, userKey);
-    if (existingUser) {
+    if (existingUser && existingUser.data.verified === true) {
       await deleteDocument(PCP_SIGNUP_OTP_COLLECTION, stagedId);
       return NextResponse.json({ error: ACCOUNT_EXISTS_MESSAGE }, { status: 409 });
     }
 
-    // Reuse an existing PCP request for this email if one is present.
-    const sameEmail = await queryDocuments(
-      SIGNUP_REQUESTS_COLLECTION,
-      [{ field: "email", value: email }],
-      { limit: 10 }
-    );
-    const existingRequest = sameEmail.find((d) => d.data.portal === PCP_PORTAL) ?? null;
-
-    if (existingRequest && existingRequest.data.status === "approved") {
-      await deleteDocument(PCP_SIGNUP_OTP_COLLECTION, stagedId);
-      return NextResponse.json({
-        ok: true,
-        status: "approved",
-        message: "Your registration is already approved. Please log in.",
-      });
+    // Atomically claim the email + phone uniqueness before writing the user so a
+    // racing signup can't end up owning the same email/phone.
+    const claim = await claimUniqueness({ userId: userKey, email, phone });
+    if (!claim.ok) {
+      const fieldLabel = claim.field === "email" ? "email" : "phone number";
+      return NextResponse.json(
+        { error: `This ${fieldLabel} is already in use by another account.` },
+        { status: 409 }
+      );
     }
 
-    if (existingRequest) {
-      // Pending request already in the queue — refresh its details and confirm
-      // the email is (still) verified. Preserves created_at and the doc id.
-      await upsertDocument(SIGNUP_REQUESTS_COLLECTION, existingRequest.id, {
-        fullName,
-        phone,
-        status: "pending",
-        emailVerified: true,
-        emailVerifiedAt: now,
-        otpCode: null,
-        otpExpiresAt: null,
-        otpAttempts: 0,
-        updatedAt: now,
-      });
-    } else {
-      // First time this email reaches the queue — create the canonical record.
-      // It enters already email-verified; the admin reviews and approves it.
-      await addDocument(SIGNUP_REQUESTS_COLLECTION, {
-        // Canonical fields shared with the GI portal:
-        fullName,
-        email,
-        phone,
-        portal: PCP_PORTAL,
-        status: "pending",
-        created_at: now,
-        // PCP-specific machinery (no password is captured here):
-        type: "pcp_user",
-        emailVerified: true,
-        emailVerifiedAt: now,
-        otpCode: null,
-        otpExpiresAt: null,
-        otpAttempts: 0,
-        updatedAt: now,
-      });
-    }
+    // Write the pcp_users doc, keyed by emailKey to match the login/index
+    // lookups. It enters verified with the password captured at signup, so the
+    // provider can log in immediately.
+    await upsertDocument(PCP_USERS_COLLECTION, userKey, {
+      name: fullName,
+      email,
+      mobile: phone,
+      verified: true,
+      verifiedAt: now,
+      passwordHash,
+      passwordSetAt: now,
+      otpCode: null,
+      otpExpiresAt: null,
+      otpAttempts: 0,
+      createdAt: now,
+      updatedAt: now,
+    });
 
-    // Drop the staged attempt now that the request is in the collection.
+    // Drop the staged attempt now that the account exists.
     await deleteDocument(PCP_SIGNUP_OTP_COLLECTION, stagedId);
 
-    return NextResponse.json({ ok: true, status: "pending" });
+    return NextResponse.json({ ok: true, status: "active" });
   } catch (err) {
     console.error("[verify] Firestore error:", err);
     const message = err instanceof Error ? err.message : "Failed to talk to Firestore.";

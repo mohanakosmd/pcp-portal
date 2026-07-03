@@ -51,6 +51,24 @@ export type GiSharedReport = {
   insuranceCarrier: string | null;
   insurancePolicyId: string | null;
   insuranceGroup: string | null;
+  insuranceEffectiveDate: string | null;
+  // Full patient intake the PCP captured in "Create New Case" (About + Health
+  // steps). Surfaced in the report preview so the whole case record is visible
+  // in one place. Each is null when the PCP left it blank.
+  address: string | null;
+  state: string | null;
+  bmi: string | null;
+  allergies: string | null;
+  existingConditions: string | null;
+  pastSurgicalHistory: string | null;
+  socialHistory: string | null;
+  recentTestsOrProcedures: string | null;
+  familyHistory: string | null;
+  lifestyleNotes: string | null;
+  primaryCarePhysician: string | null;
+  pcpPhoneFax: string | null;
+  pharmacyInformation: string | null;
+  pharmacyPhoneFax: string | null;
   // GI specialist.
   giSpecialistId: string;
   giSpecialistName: string;
@@ -247,16 +265,69 @@ function parseMedicalFile(id: string, data: Record<string, unknown>): GiMedicalF
   };
 }
 
+// The PCP's own case intake (About + Health steps), read from the case's
+// subcollection docs. Preferred over the GI portal's snapshot so the report
+// matches what the PCP entered in "Create New Case".
+type CaseIntake = {
+  fullLegalName: string | null;
+  dateOfBirth: string | null;
+  gender: string | null;
+  address: string | null;
+  state: string | null;
+  mobile: string | null;
+  email: string | null;
+  insuranceCarrier: string | null;
+  policyId: string | null;
+  groupName: string | null;
+  effectiveDate: string | null;
+  presentingSymptoms: string | null;
+  currentMedications: string | null;
+  bmi: string | null;
+  allergies: string | null;
+  existingConditions: string | null;
+  pastSurgicalHistory: string | null;
+  socialHistory: string | null;
+  recentTestsOrProcedures: string | null;
+  familyHistory: string | null;
+  lifestyleNotes: string | null;
+  primaryCarePhysician: string | null;
+  pcpPhoneFax: string | null;
+  pharmacyInformation: string | null;
+  pharmacyPhoneFax: string | null;
+};
+
+const EMPTY_INTAKE: CaseIntake = {
+  fullLegalName: null,
+  dateOfBirth: null,
+  gender: null,
+  address: null,
+  state: null,
+  mobile: null,
+  email: null,
+  insuranceCarrier: null,
+  policyId: null,
+  groupName: null,
+  effectiveDate: null,
+  presentingSymptoms: null,
+  currentMedications: null,
+  bmi: null,
+  allergies: null,
+  existingConditions: null,
+  pastSurgicalHistory: null,
+  socialHistory: null,
+  recentTestsOrProcedures: null,
+  familyHistory: null,
+  lifestyleNotes: null,
+  primaryCarePhysician: null,
+  pcpPhoneFax: null,
+  pharmacyInformation: null,
+  pharmacyPhoneFax: null,
+};
+
 function parseSharedReport(
   id: string,
   data: Record<string, unknown>,
-  caseInfo: {
-    shortCode: string;
-    fullLegalName: string | null;
-    dateOfBirth: string | null;
-    presentingSymptoms: string | null;
-    currentMedications: string | null;
-  },
+  caseInfo: CaseIntake & { shortCode: string },
   medicalFiles: GiMedicalFile[],
   remarkCount: number
 ): GiSharedReport {
@@ -285,13 +356,28 @@ function parseSharedReport(
     createdAt: strOrEmpty(data.created_at),
     patientName,
     dateOfBirth,
-    gender: strOrNull(data.gender),
-    email: strOrNull(data.email),
-    phone: strOrNull(data.phone),
+    gender: caseInfo.gender || strOrNull(data.gender),
+    email: caseInfo.email || strOrNull(data.email),
+    phone: caseInfo.mobile || strOrNull(data.phone),
     currentMedications: caseInfo.currentMedications || "",
-    insuranceCarrier: strOrNull(data.insurance_carrier),
-    insurancePolicyId: strOrNull(data.insurance_policy_id),
-    insuranceGroup: strOrNull(data.insurance_group),
+    insuranceCarrier: caseInfo.insuranceCarrier || strOrNull(data.insurance_carrier),
+    insurancePolicyId: caseInfo.policyId || strOrNull(data.insurance_policy_id),
+    insuranceGroup: caseInfo.groupName || strOrNull(data.insurance_group),
+    insuranceEffectiveDate: caseInfo.effectiveDate,
+    address: caseInfo.address,
+    state: caseInfo.state,
+    bmi: caseInfo.bmi,
+    allergies: caseInfo.allergies,
+    existingConditions: caseInfo.existingConditions,
+    pastSurgicalHistory: caseInfo.pastSurgicalHistory,
+    socialHistory: caseInfo.socialHistory,
+    recentTestsOrProcedures: caseInfo.recentTestsOrProcedures,
+    familyHistory: caseInfo.familyHistory,
+    lifestyleNotes: caseInfo.lifestyleNotes,
+    primaryCarePhysician: caseInfo.primaryCarePhysician,
+    pcpPhoneFax: caseInfo.pcpPhoneFax,
+    pharmacyInformation: caseInfo.pharmacyInformation,
+    pharmacyPhoneFax: caseInfo.pharmacyPhoneFax,
     giSpecialistId: strOrEmpty(data.gi_specialist_id),
     giSpecialistName: strOrEmpty(data.gi_specialist_name) || "GI Specialist",
     clinicalSummary: strOrEmpty(data.clinical_summary),
@@ -355,15 +441,7 @@ export async function loadGiReportsForOwner(
   const distinctCaseIds = [
     ...new Set(matched.map((s) => String(s.data.case_id))),
   ];
-  const aboutByCase = new Map<
-    string,
-    {
-      fullLegalName: string | null;
-      dateOfBirth: string | null;
-      presentingSymptoms: string | null;
-      currentMedications: string | null;
-    }
-  >();
+  const aboutByCase = new Map<string, CaseIntake>();
   await Promise.all(
     distinctCaseIds.map(async (caseId) => {
       try {
@@ -376,16 +454,32 @@ export async function loadGiReportsForOwner(
         aboutByCase.set(caseId, {
           fullLegalName: strOrNull(about.fullLegalName),
           dateOfBirth: strOrNull(about.dateOfBirth),
+          gender: strOrNull(about.gender),
+          address: strOrNull(about.address),
+          state: strOrNull(about.state),
+          mobile: strOrNull(about.mobile),
+          email: strOrNull(about.email),
+          insuranceCarrier: strOrNull(about.insuranceCarrier),
+          policyId: strOrNull(about.policyId),
+          groupName: strOrNull(about.groupName),
+          effectiveDate: strOrNull(about.effectiveDate),
           presentingSymptoms: strOrNull(health.inboxMessage),
           currentMedications: strOrNull(health.currentMedications),
+          bmi: strOrNull(health.bmi),
+          allergies: strOrNull(health.allergies),
+          existingConditions: strOrNull(health.existingConditions),
+          pastSurgicalHistory: strOrNull(health.pastSurgicalHistory),
+          socialHistory: strOrNull(health.socialHistory),
+          recentTestsOrProcedures: strOrNull(health.recentTestsOrProcedures),
+          familyHistory: strOrNull(health.familyHistory),
+          lifestyleNotes: strOrNull(health.lifestyleNotes),
+          primaryCarePhysician: strOrNull(health.primaryCarePhysician),
+          pcpPhoneFax: strOrNull(health.pcpPhoneFax),
+          pharmacyInformation: strOrNull(health.pharmacyInformation),
+          pharmacyPhoneFax: strOrNull(health.pharmacyPhoneFax),
         });
       } catch {
-        aboutByCase.set(caseId, {
-          fullLegalName: null,
-          dateOfBirth: null,
-          presentingSymptoms: null,
-          currentMedications: null,
-        });
+        aboutByCase.set(caseId, EMPTY_INTAKE);
       }
     })
   );
@@ -413,12 +507,7 @@ export async function loadGiReportsForOwner(
   const out: GiSharedReport[] = [];
   for (const s of matched) {
     const caseId = String(s.data.case_id);
-    const about = aboutByCase.get(caseId) ?? {
-      fullLegalName: null,
-      dateOfBirth: null,
-      presentingSymptoms: null,
-      currentMedications: null,
-    };
+    const about = aboutByCase.get(caseId) ?? EMPTY_INTAKE;
 
     const ids = strArray(s.data.medical_report_ids);
     const files = ids
@@ -429,13 +518,7 @@ export async function loadGiReportsForOwner(
       parseSharedReport(
         s.id,
         s.data,
-        {
-          shortCode: ownedCases.get(caseId)!,
-          fullLegalName: about.fullLegalName,
-          dateOfBirth: about.dateOfBirth,
-          presentingSymptoms: about.presentingSymptoms,
-          currentMedications: about.currentMedications,
-        },
+        { ...about, shortCode: ownedCases.get(caseId)! },
         files,
         remarkCountByReport.get(s.id) ?? 0
       )

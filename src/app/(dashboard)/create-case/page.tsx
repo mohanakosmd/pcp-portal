@@ -39,6 +39,14 @@ async function loadInitialCase(caseId: string): Promise<InitialCase | null> {
   const health = (healthDoc?.data ?? {}) as {
     inboxMessage?: string;
     currentMedications?: string | null;
+    bmi?: string | null;
+    allergies?: string | null;
+    pastSurgicalHistory?: string | null;
+    socialHistory?: string | null;
+    primaryCarePhysician?: string | null;
+    pcpPhoneFax?: string | null;
+    pharmacyInformation?: string | null;
+    pharmacyPhoneFax?: string | null;
   };
 
   const docs: InitialCaseDocument[] = docsPage.docs
@@ -81,6 +89,14 @@ async function loadInitialCase(caseId: string): Promise<InitialCase | null> {
     health: {
       inboxMessage: health.inboxMessage ?? "",
       currentMedications: health.currentMedications ?? "",
+      bmi: health.bmi ?? "",
+      allergies: health.allergies ?? "",
+      pastSurgicalHistory: health.pastSurgicalHistory ?? "",
+      socialHistory: health.socialHistory ?? "",
+      primaryCarePhysician: health.primaryCarePhysician ?? "",
+      pcpPhoneFax: health.pcpPhoneFax ?? "",
+      pharmacyInformation: health.pharmacyInformation ?? "",
+      pharmacyPhoneFax: health.pharmacyPhoneFax ?? "",
     },
     // Step 3 list = everything that ISN'T an insurance card.
     documents: docs.filter(

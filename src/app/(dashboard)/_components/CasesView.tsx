@@ -6,6 +6,10 @@ import { useEffect, useRef, useState } from "react";
 
 import { ageFromDob } from "@/lib/age";
 import type { CaseListItem, CaseListPillVariant } from "@/lib/cases";
+
+import { LocalTime } from "./LocalTime";
+import { MedicationPicker } from "./MedicationPicker";
+import { useSpeechToText } from "./useSpeechToText";
 import type { GiUser } from "@/lib/gi-users";
 import { formatUsPhone, isValidUsPhone } from "@/lib/phone";
 
@@ -555,7 +559,9 @@ function CaseTile({
         ) : null}
       </div>
       <div className="cases-tile__foot">
-        <span className="cases-tile__updated">{record.shortUpdated}</span>
+        <span className="cases-tile__updated">
+          <LocalTime iso={record.updatedAtIso} mode="short" fallback={record.shortUpdated} />
+        </span>
       </div>
     </button>
   );
@@ -943,6 +949,7 @@ function ReportModal({
 
   const [editing, setEditing] = useState(false);
   const [form, setForm] = useState<CaseListItem["editable"]>(record.editable);
+  const [healthForm, setHealthForm] = useState<CaseListItem["health"]>(record.health);
   const [insuranceFiles, setInsuranceFiles] = useState<{
     front: File | null;
     back: File | null;
@@ -957,6 +964,7 @@ function ReportModal({
   const canEdit = !record.hasFinalReport;
 
   // Leave edit mode when the modal closes or a different case is opened.
+  // (form/healthForm are (re)seeded from the record in startEdit, like `form`.)
   useEffect(() => {
     setEditing(false);
     setError("");
@@ -966,9 +974,58 @@ function ReportModal({
   const setField = (key: keyof CaseListItem["editable"], value: string) =>
     setForm((f) => ({ ...f, [key]: value }));
 
+  const setHealthField = (key: keyof CaseListItem["health"], value: string) =>
+    setHealthForm((h) => ({ ...h, [key]: value }));
+
+  // Renders one Health field: an editable input/textarea in edit mode, or the
+  // saved value (with a friendly fallback) in view mode. Keeps the Health
+  // section in sync with the create-case form's fields.
+  const renderHealthField = (
+    label: string,
+    key: keyof CaseListItem["health"],
+    opts: { multiline?: boolean; fallback: string; placeholder?: string }
+  ) => {
+    const display = String(record.health[key] ?? "").trim();
+    return (
+      <div>
+        <h5>{label}</h5>
+        {editing ? (
+          opts.multiline ? (
+            <textarea
+              style={{ ...editInputStyle, minHeight: 64, resize: "vertical" }}
+              value={String(healthForm[key] ?? "")}
+              placeholder={opts.placeholder}
+              onChange={(e) => setHealthField(key, e.target.value)}
+            />
+          ) : (
+            <input
+              style={editInputStyle}
+              value={String(healthForm[key] ?? "")}
+              placeholder={opts.placeholder}
+              onChange={(e) => setHealthField(key, e.target.value)}
+            />
+          )
+        ) : (
+          <p style={{ whiteSpace: "pre-wrap" }}>{display || opts.fallback}</p>
+        )}
+      </div>
+    );
+  };
+
+  // Speak-to-Text for the inbox message — same behavior as the create-case form.
+  const speech = useSpeechToText((finalized) =>
+    setHealthForm((h) => ({
+      ...h,
+      inboxMessage: h.inboxMessage
+        ? `${h.inboxMessage.replace(/\s+$/, "")} ${finalized}`
+        : finalized,
+    }))
+  );
+
   const startEdit = () => {
     if (!canEdit) return;
     setForm(record.editable);
+    setHealthForm(record.health);
     setInsuranceFiles({ front: null, back: null });
     setError("");
     setEditing(true);
@@ -1055,6 +1112,31 @@ function ReportModal({
       });
       const data = (await res.json().catch(() => ({}))) as { error?: string };
       if (!res.ok) throw new Error(data.error || "Could not save the changes.");
+
+      // Save the Health (Step 2) fields.
+      const hres = await fetch(`/api/cases/${record.id}/health`, {
+        method: "PATCH",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          inboxMessage: healthForm.inboxMessage,
+          bmi: healthForm.bmi,
+          allergies: healthForm.allergies,
+          currentMedications: healthForm.currentMedications,
+          existingConditions: healthForm.existingConditions,
+          pastSurgicalHistory: healthForm.pastSurgicalHistory,
+          socialHistory: healthForm.socialHistory,
+          recentTestsOrProcedures: healthForm.recentTestsOrProcedures,
+          familyHistory: healthForm.familyHistory,
+          lifestyleNotes: healthForm.lifestyleNotes,
+          primaryCarePhysician: healthForm.primaryCarePhysician,
+          pcpPhoneFax: healthForm.pcpPhoneFax,
+          pharmacyInformation: healthForm.pharmacyInformation,
+          pharmacyPhoneFax: healthForm.pharmacyPhoneFax,
+          urgencyLevel: healthForm.urgencyLevel || undefined,
+        }),
+      });
+      const hdata = (await hres.json().catch(() => ({}))) as { error?: string };
+      if (!hres.ok) throw new Error(hdata.error || "Could not save the health details.");
 
       // Upload any replaced insurance cards.
       if (insuranceFiles.front) await uploadCard("front", insuranceFiles.front, insuranceFront);
@@ -1153,7 +1235,13 @@ function ReportModal({
                 <div>
                   <h4>{record.name} - Patient Report</h4>
                   <p>
-                    {record.mrn} | {record.status} | {record.updated}
+                    {record.mrn} | {record.status} |{" "}
+                    <LocalTime
+                      iso={record.updatedAtIso}
+                      mode="date"
+                      prefix="Updated "
+                      fallback={record.updated}
+                    />
                   </p>
                 </div>
               </div>
@@ -1165,15 +1253,6 @@ function ReportModal({
                 </span>
               </div>
             </header>
-
-            <div>
-              <h5>Summary to inbox</h5>
-              <p>
-                {record.inboxMessage.trim()
-                  ? record.inboxMessage
-                  : "No inbox summary was provided for this case."}
-              </p>
-            </div>
 
             <div>
               <h5>Demographic details</h5>
@@ -1362,6 +1441,95 @@ function ReportModal({
                 )}
               </div>
             </div>
+
+            <div>
+              <h5>Summary to inbox</h5>
+              {editing ? (
+                <>
+                  <textarea
+                    style={{ ...editInputStyle, minHeight: 80, resize: "vertical" }}
+                    value={healthForm.inboxMessage}
+                    onChange={(e) => setHealthField("inboxMessage", e.target.value)}
+                  />
+                  <div className="cc-speech-action-row" style={{ marginTop: 8 }}>
+                    <button
+                      type="button"
+                      className={`cc-speech-btn${speech.listening ? " cc-speech-btn--listening" : ""}`}
+                      aria-label={speech.listening ? "Stop speech to text" : "Start speech to text"}
+                      aria-pressed={speech.listening}
+                      title={speech.listening ? "Stop recording" : "Speak-to-Text"}
+                      onClick={speech.toggle}
+                      disabled={!speech.supported}
+                    >
+                      <svg width="22" height="22" viewBox="0 0 24 24" fill="none" aria-hidden="true">
+                        <rect x="9" y="4" width="6" height="10" rx="3" stroke="currentColor" strokeWidth="1.9" />
+                        <path d="M6.5 11.5V12a5.5 5.5 0 0011 0v-.5" stroke="currentColor" strokeWidth="1.9" strokeLinecap="round" />
+                        <path d="M12 17.5V21" stroke="currentColor" strokeWidth="1.9" strokeLinecap="round" />
+                        <path d="M9 21h6" stroke="currentColor" strokeWidth="1.9" strokeLinecap="round" />
+                      </svg>
+                    </button>
+                  </div>
+                  <p className="cc-field-hint" aria-live="polite" style={{ marginTop: 4 }}>
+                    {speech.status}
+                  </p>
+                </>
+              ) : (
+                <p>
+                  {record.inboxMessage.trim()
+                    ? record.inboxMessage
+                    : "No inbox summary was provided for this case."}
+                </p>
+              )}
+            </div>
+
+            <div>
+              <h5>Current medication</h5>
+              {editing ? (
+                <MedicationPicker
+                  value={healthForm.currentMedications}
+                  onChange={(v) => setHealthField("currentMedications", v)}
+                />
+              ) : (
+                <p style={{ whiteSpace: "pre-wrap" }}>
+                  {record.health.currentMedications.trim()
+                    ? record.health.currentMedications
+                    : "No current medication reported."}
+                </p>
+              )}
+              <p style={{ color: "#94a3b8", fontSize: 12, margin: "6px 0 0" }}>
+                Medications reported by the patient during intake.
+              </p>
+            </div>
+
+            {renderHealthField("BMI", "bmi", {
+              fallback: "No BMI recorded.",
+              placeholder: "e.g. 24.5",
+            })}
+            {renderHealthField("Allergies", "allergies", {
+              multiline: true,
+              fallback: "No allergies reported.",
+            })}
+            {renderHealthField("Past surgical history", "pastSurgicalHistory", {
+              multiline: true,
+              fallback: "No past surgical history reported.",
+            })}
+            {renderHealthField("Social history", "socialHistory", {
+              multiline: true,
+              fallback: "No social history reported.",
+            })}
+            {renderHealthField("Primary Care Physician (PCP)", "primaryCarePhysician", {
+              fallback: "No primary care physician provided.",
+            })}
+            {renderHealthField("PCP phone & fax", "pcpPhoneFax", {
+              fallback: "No PCP phone/fax provided.",
+            })}
+            {renderHealthField("Pharmacy information", "pharmacyInformation", {
+              multiline: true,
+              fallback: "No pharmacy information provided.",
+            })}
+            {renderHealthField("Pharmacy phone & fax", "pharmacyPhoneFax", {
+              fallback: "No pharmacy phone/fax provided.",
+            })}
 
             <div>
               <h5>Uploaded documents and key findings</h5>

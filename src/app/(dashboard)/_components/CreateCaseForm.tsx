@@ -92,7 +92,18 @@ export type InitialCase = {
     insuranceFrontUrl: string | null;
     insuranceBackUrl: string | null;
   };
-  health: { inboxMessage: string; currentMedications: string };
+  health: {
+    inboxMessage: string;
+    currentMedications: string;
+    bmi: string;
+    allergies: string;
+    pastSurgicalHistory: string;
+    socialHistory: string;
+    primaryCarePhysician: string;
+    pcpPhoneFax: string;
+    pharmacyInformation: string;
+    pharmacyPhoneFax: string;
+  };
   documents: InitialCaseDocument[];
 };
 
@@ -214,6 +225,26 @@ export function CreateCaseForm({
   );
   const [currentMedications, setCurrentMedications] = useState(
     initialCase?.health.currentMedications ?? ""
+  );
+  const [bmi, setBmi] = useState(initialCase?.health.bmi ?? "");
+  const [allergies, setAllergies] = useState(initialCase?.health.allergies ?? "");
+  const [pastSurgicalHistory, setPastSurgicalHistory] = useState(
+    initialCase?.health.pastSurgicalHistory ?? ""
+  );
+  const [socialHistory, setSocialHistory] = useState(
+    initialCase?.health.socialHistory ?? ""
+  );
+  const [primaryCarePhysician, setPrimaryCarePhysician] = useState(
+    initialCase?.health.primaryCarePhysician ?? ""
+  );
+  const [pcpPhoneFax, setPcpPhoneFax] = useState(
+    initialCase?.health.pcpPhoneFax ?? ""
+  );
+  const [pharmacyInformation, setPharmacyInformation] = useState(
+    initialCase?.health.pharmacyInformation ?? ""
+  );
+  const [pharmacyPhoneFax, setPharmacyPhoneFax] = useState(
+    initialCase?.health.pharmacyPhoneFax ?? ""
   );
   const [speechStatus, setSpeechStatus] = useState("Speech input is ready. You can type anytime.");
   const [isListening, setIsListening] = useState(false);
@@ -353,6 +384,14 @@ export function CreateCaseForm({
     return {
       inboxMessage,
       currentMedications,
+      bmi,
+      allergies,
+      pastSurgicalHistory,
+      socialHistory,
+      primaryCarePhysician,
+      pcpPhoneFax,
+      pharmacyInformation,
+      pharmacyPhoneFax,
       urgencyLevel: "routine",
     };
   }
@@ -402,17 +441,28 @@ export function CreateCaseForm({
   }
 
   /**
-   * Validation for Steps 2 and 3 (Step 1 uses aboutFieldErrors). Returns an
-   * error string or null. Step 3 (Files) has no required fields.
+   * Per-field validation for the Health step (Step 2). Returns a
+   * { fieldKey: message } map (empty when valid) so messages render inline under
+   * each field, matching Step 1. The inbox message is required to advance/submit
+   * (requireInbox); BMI, when provided, must be a plausible number. Every other
+   * Health field is optional free text. Step 3 (Files) has no required fields.
    */
-  function validateStep(step: StepNumber): string | null {
-    if (step === 2) {
-      if (!inboxMessage.trim()) {
-        return "Add your Health inbox message before continuing.";
-      }
-      return null;
+  function healthFieldErrors(opts: { requireInbox: boolean }): Record<string, string> {
+    const errs: Record<string, string> = {};
+
+    if (opts.requireInbox && !inboxMessage.trim()) {
+      errs.inboxMessage = "Add your Health inbox message before continuing.";
     }
-    return null; // Step 3 — files are optional.
+
+    const bmiVal = bmi.trim();
+    if (bmiVal) {
+      const n = Number(bmiVal);
+      if (!Number.isFinite(n) || n < 10 || n > 80) {
+        errs.bmi = "Enter a valid BMI between 10 and 80.";
+      }
+    }
+
+    return errs;
   }
 
   async function uploadOneFile(
@@ -427,25 +477,60 @@ export function CreateCaseForm({
         error: `"${file.name}" is ${(prepared.size / (1024 * 1024)).toFixed(1)} MB — the limit is 5 MB per file.`,
       };
     }
-    const fd = new FormData();
-    fd.append("file", prepared);
-    fd.append("kind", kind);
-    const response = await fetch("/api/cases/" + id + "/documents", {
-      method: "POST",
-      body: fd,
-    });
-    let data: Record<string, unknown> = {};
-    try {
-      data = (await response.json()) as Record<string, unknown>;
-    } catch {
-      // ignore
+    // Bytes are base64-chunked into Firestore server-side, which can be slow on
+    // a poor connection, so give each attempt a generous timeout and retry
+    // transient (network / timeout / 5xx) failures. 4xx responses are the
+    // client's fault and won't improve on retry, so those return immediately
+    // with the server's specific reason.
+    const MAX_ATTEMPTS = 3;
+    const UPLOAD_TIMEOUT_MS = 90_000;
+    let lastError = "";
+
+    for (let attempt = 1; attempt <= MAX_ATTEMPTS; attempt++) {
+      const fd = new FormData();
+      fd.append("file", prepared);
+      fd.append("kind", kind);
+
+      const controller = new AbortController();
+      const timer = setTimeout(() => controller.abort(), UPLOAD_TIMEOUT_MS);
+      try {
+        const response = await fetch("/api/cases/" + id + "/documents", {
+          method: "POST",
+          body: fd,
+          signal: controller.signal,
+        });
+        let data: Record<string, unknown> = {};
+        try {
+          data = (await response.json()) as Record<string, unknown>;
+        } catch {
+          // ignore — non-JSON error body (handled below)
+        }
+        if (response.ok) {
+          return { ok: true, fileId: typeof data.fileId === "string" ? data.fileId : undefined };
+        }
+        lastError = errorFrom(data, `Upload failed (server error ${response.status}).`);
+        // Don't retry client errors (bad request, too large, unauthenticated…).
+        if (response.status >= 400 && response.status < 500) {
+          return { ok: false, error: `${lastError} (${file.name})` };
+        }
+      } catch (err) {
+        lastError =
+          err instanceof Error && err.name === "AbortError"
+            ? `Upload timed out after ${Math.round(UPLOAD_TIMEOUT_MS / 1000)}s.`
+            : "Network error while uploading.";
+      } finally {
+        clearTimeout(timer);
+      }
+
+      // Back off briefly before retrying a transient failure.
+      if (attempt < MAX_ATTEMPTS) {
+        await new Promise((resolve) => setTimeout(resolve, 800 * attempt));
+      }
     }
-    if (!response.ok) {
-      return { ok: false, error: errorFrom(data, "Upload failed.") };
-    }
+
     return {
-      ok: true,
-      fileId: typeof data.fileId === "string" ? data.fileId : undefined,
+      ok: false,
+      error: `${lastError || "Upload failed."} — couldn't attach "${file.name}" after ${MAX_ATTEMPTS} tries.`,
     };
   }
 
@@ -486,10 +571,11 @@ export function CreateCaseForm({
         setServerError("");
         return;
       }
-    } else {
-      const error = validateStep(currentStep);
-      if (error) {
-        setServerError(error);
+    } else if (currentStep === 2) {
+      const errs = healthFieldErrors({ requireInbox: true });
+      if (Object.keys(errs).length) {
+        setFieldErrors(errs);
+        setServerError("");
         return;
       }
     }
@@ -516,6 +602,17 @@ export function CreateCaseForm({
     });
   };
 
+  // Clears a single field's inline error. Used by the controlled Step 2 (Health)
+  // fields, which don't flow through the form-level handleFormChange.
+  const clearFieldError = useCallback((key: string) => {
+    setFieldErrors((prev) => {
+      if (!prev[key]) return prev;
+      const next = { ...prev };
+      delete next[key];
+      return next;
+    });
+  }, []);
+
   // Previous is always allowed (reviewing/editing an earlier part).
   const handlePrev = () => {
     if (currentStep > 1) {
@@ -533,9 +630,16 @@ export function CreateCaseForm({
     goToStep(step);
   };
 
-  /** Uploads any Step 3 documents still held in memory (status "pending"). */
+  /**
+   * Uploads any Step 3 documents still held in memory (status "pending").
+   * Attempts EVERY pending file (doesn't stop at the first failure) so one bad
+   * file doesn't strand the rest; each file's row shows its own done/error
+   * state. Throws a single combined, specific error if any file ultimately
+   * failed — the caller decides whether that blocks submission.
+   */
   async function uploadPendingFiles(id: string): Promise<void> {
     const pending = files.filter((f) => f.status === "pending" && f.file);
+    const failures: string[] = [];
     for (const entry of pending) {
       setFiles((prev) =>
         prev.map((f) => (f.id === entry.id ? { ...f, status: "uploading" as const } : f))
@@ -551,8 +655,15 @@ export function CreateCaseForm({
         )
       );
       if (!result.ok) {
-        throw new Error(result.error || `Upload failed for "${entry.name}".`);
+        failures.push(result.error || `Couldn't attach "${entry.name}".`);
       }
+    }
+    if (failures.length) {
+      throw new Error(
+        failures.length === 1
+          ? failures[0]
+          : `${failures.length} files couldn't be attached — ${failures.join(" ")}`
+      );
     }
   }
 
@@ -571,7 +682,14 @@ export function CreateCaseForm({
       body: JSON.stringify(readAboutFromForm()),
     });
     if (!aboutRes.ok) {
-      throw new Error(errorFrom(aboutRes.data, "Could not save the About details."));
+      // Prefer the server's specific reason; fall back to a status-bearing
+      // message that points at the step to review (never a dead-end generic).
+      throw new Error(
+        errorFrom(
+          aboutRes.data,
+          `Could not save the About details (error ${aboutRes.status}). Please review Step 1 (About you) and try again.`
+        )
+      );
     }
 
     const healthRes = await callJson("/api/cases/" + id + "/health", {
@@ -579,7 +697,12 @@ export function CreateCaseForm({
       body: JSON.stringify(readHealthFromForm()),
     });
     if (!healthRes.ok) {
-      throw new Error(errorFrom(healthRes.data, "Could not save the Health details."));
+      throw new Error(
+        errorFrom(
+          healthRes.data,
+          `Could not save the Health details (error ${healthRes.status}). Please review Step 2 (Health) and try again.`
+        )
+      );
     }
 
     await uploadPendingFiles(id);
@@ -599,6 +722,15 @@ export function CreateCaseForm({
       setFieldErrors(aboutErrs);
       setServerError("");
       if (currentStep !== 1) goToStep(1);
+      return;
+    }
+    // Drafts may be incomplete (no inbox message yet), but a BMI that's typed
+    // must still be valid before we persist it.
+    const healthErrs = healthFieldErrors({ requireInbox: false });
+    if (Object.keys(healthErrs).length) {
+      setFieldErrors(healthErrs);
+      setServerError("");
+      if (currentStep !== 2) goToStep(2);
       return;
     }
     setFieldErrors({});
@@ -635,9 +767,10 @@ export function CreateCaseForm({
       goToStep(1);
       return;
     }
-    const healthError = validateStep(2);
-    if (healthError) {
-      setServerError(healthError);
+    const healthErrs = healthFieldErrors({ requireInbox: true });
+    if (Object.keys(healthErrs).length) {
+      setFieldErrors(healthErrs);
+      setServerError("");
       goToStep(2);
       return;
     }
@@ -1092,13 +1225,36 @@ export function CreateCaseForm({
         <Step2Panel
           active={currentStep === 2}
           inboxMessage={inboxMessage}
-          onInboxChange={setInboxMessage}
+          onInboxChange={(v) => {
+            setInboxMessage(v);
+            clearFieldError("inboxMessage");
+          }}
           currentMedications={currentMedications}
           onCurrentMedicationsChange={setCurrentMedications}
+          bmi={bmi}
+          onBmiChange={(v) => {
+            setBmi(v);
+            clearFieldError("bmi");
+          }}
+          allergies={allergies}
+          onAllergiesChange={setAllergies}
+          pastSurgicalHistory={pastSurgicalHistory}
+          onPastSurgicalHistoryChange={setPastSurgicalHistory}
+          socialHistory={socialHistory}
+          onSocialHistoryChange={setSocialHistory}
+          primaryCarePhysician={primaryCarePhysician}
+          onPrimaryCarePhysicianChange={setPrimaryCarePhysician}
+          pcpPhoneFax={pcpPhoneFax}
+          onPcpPhoneFaxChange={setPcpPhoneFax}
+          pharmacyInformation={pharmacyInformation}
+          onPharmacyInformationChange={setPharmacyInformation}
+          pharmacyPhoneFax={pharmacyPhoneFax}
+          onPharmacyPhoneFaxChange={setPharmacyPhoneFax}
           speechStatus={speechStatus}
           speechSupported={speechSupported}
           isListening={isListening}
           onStartSpeech={handleStartSpeech}
+          errors={fieldErrors}
         />
         <Step3Panel
           active={currentStep === 3}
@@ -1612,10 +1768,27 @@ type Step2PanelProps = {
   onInboxChange: (value: string) => void;
   currentMedications: string;
   onCurrentMedicationsChange: (value: string) => void;
+  bmi: string;
+  onBmiChange: (value: string) => void;
+  allergies: string;
+  onAllergiesChange: (value: string) => void;
+  pastSurgicalHistory: string;
+  onPastSurgicalHistoryChange: (value: string) => void;
+  socialHistory: string;
+  onSocialHistoryChange: (value: string) => void;
+  primaryCarePhysician: string;
+  onPrimaryCarePhysicianChange: (value: string) => void;
+  pcpPhoneFax: string;
+  onPcpPhoneFaxChange: (value: string) => void;
+  pharmacyInformation: string;
+  onPharmacyInformationChange: (value: string) => void;
+  pharmacyPhoneFax: string;
+  onPharmacyPhoneFaxChange: (value: string) => void;
   speechStatus: string;
   speechSupported: boolean;
   isListening: boolean;
   onStartSpeech: () => void;
+  errors: Record<string, string>;
 };
 
 function Step2Panel({
@@ -1624,11 +1797,34 @@ function Step2Panel({
   onInboxChange,
   currentMedications,
   onCurrentMedicationsChange,
+  bmi,
+  onBmiChange,
+  allergies,
+  onAllergiesChange,
+  pastSurgicalHistory,
+  onPastSurgicalHistoryChange,
+  socialHistory,
+  onSocialHistoryChange,
+  primaryCarePhysician,
+  onPrimaryCarePhysicianChange,
+  pcpPhoneFax,
+  onPcpPhoneFaxChange,
+  pharmacyInformation,
+  onPharmacyInformationChange,
+  pharmacyPhoneFax,
+  onPharmacyPhoneFaxChange,
   speechStatus,
   speechSupported,
   isListening,
   onStartSpeech,
+  errors,
 }: Step2PanelProps) {
+  const fieldError = (key: string) =>
+    errors[key] ? (
+      <span className="cc-field-error" role="alert">
+        {errors[key]}
+      </span>
+    ) : null;
   return (
     <div
       className={`cc-panel cc-panel--step2${active ? " is-active" : ""}`}
@@ -1705,6 +1901,7 @@ function Step2Panel({
                 placeholder="Describe your current symptoms, concerns, or updates..."
                 value={inboxMessage}
                 onChange={(e) => onInboxChange(e.target.value)}
+                aria-invalid={errors.inboxMessage ? true : undefined}
               />
               <div className="cc-speech-action-row">
                 <button
@@ -1745,6 +1942,7 @@ function Step2Panel({
               <p className="cc-field-hint" aria-live="polite">
                 {speechStatus}
               </p>
+              {fieldError("inboxMessage")}
             </div>
 
             <div className="cc-field cc-field--clinical-block">
@@ -1758,6 +1956,126 @@ function Step2Panel({
               <p className="cc-field-hint" style={{ marginTop: 8 }}>
                 Medications reported by the patient during intake.
               </p>
+            </div>
+          </section>
+
+          <section
+            className="dash-card cc-step1-card"
+            aria-labelledby="cc-health-more-heading"
+          >
+            <div className="dash-card__head cc-step1-card__head cc-step1-card__head--ruled">
+              <div className="cc-step1-card__head-main">
+                <h2 id="cc-health-more-heading" className="cc-step1-card__title">
+                  Medical history &amp; care team
+                </h2>
+              </div>
+              <p className="cc-step1-card__lede cc-step1-card__head-copy">
+                Optional, but the more you share the better your GI specialist can help.
+              </p>
+            </div>
+
+            <div className="cc-form-section">
+              <div className="cc-grid cc-grid--2 cc-step1-fields">
+                <div className="cc-field">
+                  <label htmlFor="cc-bmi">BMI</label>
+                  <input
+                    className="cc-input"
+                    id="cc-bmi"
+                    name="bmi"
+                    type="text"
+                    inputMode="decimal"
+                    placeholder="e.g. 24.5"
+                    value={bmi}
+                    onChange={(e) => onBmiChange(e.target.value)}
+                    aria-invalid={errors.bmi ? true : undefined}
+                  />
+                  {fieldError("bmi")}
+                </div>
+                <div className="cc-field">
+                  <label htmlFor="cc-pcp">Primary Care Physician (PCP)</label>
+                  <input
+                    className="cc-input"
+                    id="cc-pcp"
+                    name="primary_care_physician"
+                    type="text"
+                    placeholder="Dr. name / clinic"
+                    value={primaryCarePhysician}
+                    onChange={(e) => onPrimaryCarePhysicianChange(e.target.value)}
+                  />
+                </div>
+                <div className="cc-field">
+                  <label htmlFor="cc-pcp-phone-fax">PCP Phone &amp; Fax</label>
+                  <input
+                    className="cc-input"
+                    id="cc-pcp-phone-fax"
+                    name="pcp_phone_fax"
+                    type="text"
+                    placeholder="Phone · Fax"
+                    value={pcpPhoneFax}
+                    onChange={(e) => onPcpPhoneFaxChange(e.target.value)}
+                  />
+                </div>
+                <div className="cc-field">
+                  <label htmlFor="cc-pharmacy-phone-fax">Pharmacy Phone &amp; Fax</label>
+                  <input
+                    className="cc-input"
+                    id="cc-pharmacy-phone-fax"
+                    name="pharmacy_phone_fax"
+                    type="text"
+                    placeholder="Phone · Fax"
+                    value={pharmacyPhoneFax}
+                    onChange={(e) => onPharmacyPhoneFaxChange(e.target.value)}
+                  />
+                </div>
+                <div className="cc-field cc-step1-field-full">
+                  <label htmlFor="cc-pharmacy-info">Pharmacy Information</label>
+                  <textarea
+                    className="cc-textarea"
+                    id="cc-pharmacy-info"
+                    name="pharmacy_information"
+                    rows={2}
+                    placeholder="Pharmacy name and address"
+                    value={pharmacyInformation}
+                    onChange={(e) => onPharmacyInformationChange(e.target.value)}
+                  />
+                </div>
+                <div className="cc-field cc-step1-field-full">
+                  <label htmlFor="cc-allergies">Allergies</label>
+                  <textarea
+                    className="cc-textarea"
+                    id="cc-allergies"
+                    name="allergies"
+                    rows={2}
+                    placeholder="Medications, foods, environmental — or 'None known'"
+                    value={allergies}
+                    onChange={(e) => onAllergiesChange(e.target.value)}
+                  />
+                </div>
+                <div className="cc-field cc-step1-field-full">
+                  <label htmlFor="cc-past-surgical">Past Surgical History</label>
+                  <textarea
+                    className="cc-textarea"
+                    id="cc-past-surgical"
+                    name="past_surgical_history"
+                    rows={2}
+                    placeholder="Prior surgeries and approximate dates"
+                    value={pastSurgicalHistory}
+                    onChange={(e) => onPastSurgicalHistoryChange(e.target.value)}
+                  />
+                </div>
+                <div className="cc-field cc-step1-field-full">
+                  <label htmlFor="cc-social-history">Social History</label>
+                  <textarea
+                    className="cc-textarea"
+                    id="cc-social-history"
+                    name="social_history"
+                    rows={2}
+                    placeholder="Tobacco, alcohol, occupation, etc."
+                    value={socialHistory}
+                    onChange={(e) => onSocialHistoryChange(e.target.value)}
+                  />
+                </div>
+              </div>
             </div>
           </section>
         </div>

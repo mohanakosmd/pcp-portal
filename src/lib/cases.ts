@@ -87,12 +87,19 @@ export type CaseAboutDoc = {
 
 export type CaseHealthDoc = {
   inboxMessage: string;
+  bmi: string | null;
   allergies: string | null;
   currentMedications: string | null;
   existingConditions: string | null;
+  pastSurgicalHistory: string | null;
+  socialHistory: string | null;
   recentTestsOrProcedures: string | null;
   familyHistory: string | null;
   lifestyleNotes: string | null;
+  primaryCarePhysician: string | null;
+  pcpPhoneFax: string | null;
+  pharmacyInformation: string | null;
+  pharmacyPhoneFax: string | null;
   urgencyLevel: UrgencyLevel | null;
   updatedAt: string;
   updatedByUserId: string;
@@ -224,6 +231,9 @@ export type CaseListItem = {
   statusVariant: CaseListPillVariant;
   updated: string;
   shortUpdated: string;
+  // Raw ISO of the last update, so the UI can render it in the viewer's local
+  // time zone (the `updated`/`shortUpdated` strings are server-formatted).
+  updatedAtIso: string;
   condition: string;
   aiFirstSummary: string;
   // The patient's full Health inbox message (Step 2 of create-case), shown as
@@ -271,6 +281,24 @@ export type CaseListItem = {
     policyId: string;
     groupName: string;
     effectiveDate: string;
+  };
+  // Raw Health (Step 2) values for the report modal's editable Health section.
+  health: {
+    inboxMessage: string;
+    bmi: string;
+    allergies: string;
+    currentMedications: string;
+    existingConditions: string;
+    pastSurgicalHistory: string;
+    socialHistory: string;
+    recentTestsOrProcedures: string;
+    familyHistory: string;
+    lifestyleNotes: string;
+    primaryCarePhysician: string;
+    pcpPhoneFax: string;
+    pharmacyInformation: string;
+    pharmacyPhoneFax: string;
+    urgencyLevel: UrgencyLevel | "";
   };
 };
 
@@ -481,6 +509,7 @@ export async function loadCasesForOwner(
         statusVariant,
         updated: updated.full,
         shortUpdated: updated.short,
+        updatedAtIso: updatedIso,
         condition: display.condition,
         aiFirstSummary,
         inboxMessage: inbox,
@@ -515,6 +544,33 @@ export async function loadCasesForOwner(
           policyId: typeof about.policyId === "string" ? about.policyId : "",
           groupName: typeof about.groupName === "string" ? about.groupName : "",
           effectiveDate: typeof about.effectiveDate === "string" ? about.effectiveDate : "",
+        },
+        health: {
+          inboxMessage: typeof health.inboxMessage === "string" ? health.inboxMessage : "",
+          bmi: typeof health.bmi === "string" ? health.bmi : "",
+          allergies: typeof health.allergies === "string" ? health.allergies : "",
+          currentMedications:
+            typeof health.currentMedications === "string" ? health.currentMedications : "",
+          existingConditions:
+            typeof health.existingConditions === "string" ? health.existingConditions : "",
+          pastSurgicalHistory:
+            typeof health.pastSurgicalHistory === "string" ? health.pastSurgicalHistory : "",
+          socialHistory:
+            typeof health.socialHistory === "string" ? health.socialHistory : "",
+          recentTestsOrProcedures:
+            typeof health.recentTestsOrProcedures === "string"
+              ? health.recentTestsOrProcedures
+              : "",
+          familyHistory: typeof health.familyHistory === "string" ? health.familyHistory : "",
+          lifestyleNotes: typeof health.lifestyleNotes === "string" ? health.lifestyleNotes : "",
+          primaryCarePhysician:
+            typeof health.primaryCarePhysician === "string" ? health.primaryCarePhysician : "",
+          pcpPhoneFax: typeof health.pcpPhoneFax === "string" ? health.pcpPhoneFax : "",
+          pharmacyInformation:
+            typeof health.pharmacyInformation === "string" ? health.pharmacyInformation : "",
+          pharmacyPhoneFax:
+            typeof health.pharmacyPhoneFax === "string" ? health.pharmacyPhoneFax : "",
+          urgencyLevel: (health.urgencyLevel as UrgencyLevel) ?? "",
         },
       };
     })

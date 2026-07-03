@@ -4,6 +4,7 @@ import { useEffect, useMemo, useRef, useState } from "react";
 
 import { ageFromDob } from "@/lib/age";
 import type { GiSharedReport } from "@/lib/gi-reports";
+import { usStateName } from "@/lib/us-area-codes";
 
 type ReportComment = {
   id: string;
@@ -26,6 +27,12 @@ function formatDate(iso: string | null | undefined): string {
   });
 }
 
+// A GI-shared report's status comes through as "Finalized"; show it as
+// "Completed" so it matches the case status the PCP sees everywhere else.
+function displayStatus(status: string): string {
+  return status.trim().toLowerCase() === "finalized" ? "Completed" : status;
+}
+
 function formatDateTime(iso: string | null | undefined): string {
   if (!iso) return "—";
   const d = new Date(iso);
@@ -35,6 +42,31 @@ function formatDateTime(iso: string | null | undefined): string {
     day: "numeric",
     year: "numeric",
   })} · ${d.toLocaleTimeString(undefined, { hour: "numeric", minute: "2-digit" })}`;
+}
+
+// Turns the stored gender enum (e.g. "non_binary", "prefer_not_to_say") into a
+// readable label for display.
+function formatGender(gender: string | null | undefined): string | null {
+  if (!gender) return null;
+  const labels: Record<string, string> = {
+    female: "Female",
+    male: "Male",
+    non_binary: "Non-binary",
+    prefer_not_to_say: "Prefer not to say",
+    other: "Other",
+  };
+  return labels[gender] ?? gender.charAt(0).toUpperCase() + gender.slice(1);
+}
+
+// Splits a free-text intake field into individual bullet items. Breaks on
+// newlines, semicolons and bullet glyphs (but NOT commas, so entries like
+// "Iron, total" stay intact) and strips any leading list markers.
+function splitToBullets(s: string | null | undefined): string[] {
+  if (!s) return [];
+  return s
+    .split(/[\n;•]+/)
+    .map((t) => t.replace(/^[\s\-*·]+/, "").trim())
+    .filter(Boolean);
 }
 
 function splitSymptoms(s: string): string[] {
@@ -217,6 +249,33 @@ async function downloadReportPdf(row: GiSharedReport): Promise<void> {
     y += boxH + 12;
   };
 
+  // Bordered "Assessment & Plan" file cards, two per row, tinted light blue —
+  // mirrors the card list in the report modal and the GI "Final Note" layout.
+  const drawFileCards = (labels: string[]) => {
+    if (labels.length === 0) return;
+    const gap = 10;
+    const cardW = (contentW - gap) / 2;
+    const cardH = 26;
+    for (let i = 0; i < labels.length; i += 2) {
+      ensure(cardH + gap);
+      for (let c = 0; c < 2; c++) {
+        const label = labels[i + c];
+        if (!label) continue;
+        const x = margin + c * (cardW + gap);
+        doc.setFillColor(248, 250, 252);
+        doc.setDrawColor(191, 219, 254);
+        doc.roundedRect(x, y, cardW, cardH, 5, 5, "FD");
+        doc.setFont("helvetica", "bold");
+        doc.setFontSize(9.5);
+        doc.setTextColor(37, 99, 235);
+        const lns = doc.splitTextToSize(label, cardW - 24) as string[];
+        doc.text(lns[0] ?? label, x + 12, y + cardH / 2 + 3);
+      }
+      y += cardH + gap;
+    }
+    y += 2;
+  };
+
   // --- Header: logo (page 1) ---
   doc.setFont("helvetica", "bold");
   doc.setFontSize(22);
@@ -228,26 +287,21 @@ async function downloadReportPdf(row: GiSharedReport): Promise<void> {
   doc.text("CARE", margin + logoW + 5, y + 14);
   y += 36;
 
-  // --- Info cards (omit ones with no data) ---
-  const cards: { label: string; lines: string[] }[] = [];
-  if (row.giSpecialistName) {
-    cards.push({
-      label: "GI Specialist",
-      lines: [
-        row.giSpecialistName,
-        row.priorityScore && row.priorityScore !== "—" ? row.priorityScore : "",
-      ].filter(Boolean),
-    });
-  }
-  cards.push({
-    label: "Report",
-    lines: [row.reportName || "GI Specialist Report", `Finalized ${formatDate(row.sharedAt)}`],
-  });
-  cards.push({
-    label: "Case",
-    lines: [`#${row.caseShortCode}`, `Status: ${row.status}`],
-  });
-  drawInfoCards(cards);
+  // --- Info cards: Provider / Primary Care Physician / Pharmacy ---
+  drawInfoCards([
+    {
+      label: "Provider",
+      lines: [row.giSpecialistName || "GI Specialist", "GI Specialist"],
+    },
+    {
+      label: "Primary Care Physician",
+      lines: [row.primaryCarePhysician || "—", row.pcpPhoneFax || ""].filter(Boolean),
+    },
+    {
+      label: "Pharmacy",
+      lines: [row.pharmacyInformation || "—", row.pharmacyPhoneFax || ""].filter(Boolean),
+    },
+  ]);
 
   // --- Patient name ---
   ensure(30);
@@ -259,22 +313,51 @@ async function downloadReportPdf(row: GiSharedReport): Promise<void> {
 
   // --- Demographics ---
   const age = ageFromDob(row.dateOfBirth);
-  const sex = row.gender ? row.gender.charAt(0).toUpperCase() + row.gender.slice(1) : "—";
-  drawFieldGrid([
-    { label: "Date of Birth", value: row.dateOfBirth ? formatDate(row.dateOfBirth) : "—" },
-    { label: "Age", value: age != null ? `${age} yrs` : "—" },
-    { label: "Sex", value: sex },
-    { label: "Phone", value: row.phone || "—" },
-  ]);
+  const sex = formatGender(row.gender) ?? "—";
+  drawFieldGrid(
+    [
+      { label: "Date of Birth", value: row.dateOfBirth ? formatDate(row.dateOfBirth) : "—" },
+      { label: "Age", value: age != null ? `${age} yrs` : "—" },
+      { label: "Sex", value: sex },
+      { label: "Phone", value: row.phone || "—" },
+    ],
+    { cols: 4 }
+  );
+  // Second demographics row. Height/Weight aren't captured by the PCP intake,
+  // so we surface BMI alongside the other contact details we do have.
+  drawFieldGrid(
+    [
+      { label: "BMI", value: row.bmi || "—" },
+      { label: "Email", value: row.email || "—" },
+      { label: "State", value: row.state ? usStateName(row.state) : "—" },
+    ],
+    { cols: 3 }
+  );
+  if (row.address) {
+    drawFieldGrid([{ label: "Address", value: row.address }]);
+  }
+
+  // --- Date of consultation ---
+  write(`Date of Consultation: ${formatDate(row.sharedAt)}`, {
+    bold: true,
+    size: 10,
+    color: [3, 54, 114],
+    gap: 8,
+  });
 
   // --- Chief complaint (best available reason for consult) ---
-  drawChiefComplaint(row.recommendedProcedures[0] || row.recommendedTests[0] || "");
+  drawChiefComplaint(
+    row.recommendedProcedures[0] || row.recommendedTests[0] || row.clinicalDiagnosis || ""
+  );
 
-  // --- Insurance (omit entirely when empty) ---
+  // --- Insurance (blue cells; omit entirely when empty) ---
   const insuranceCells = [
     row.insuranceCarrier ? { label: "Insurance Carrier", value: row.insuranceCarrier } : null,
     row.insuranceGroup ? { label: "Group Name", value: row.insuranceGroup } : null,
     row.insurancePolicyId ? { label: "Insurance ID", value: row.insurancePolicyId } : null,
+    row.insuranceEffectiveDate
+      ? { label: "Effective Date", value: formatDate(row.insuranceEffectiveDate) }
+      : null,
   ].filter((c): c is { label: string; value: string } => c !== null);
   if (insuranceCells.length > 0) {
     drawFieldGrid(insuranceCells, { fill: [239, 246, 255] });
@@ -286,83 +369,127 @@ async function downloadReportPdf(row: GiSharedReport): Promise<void> {
     heading("History of Present Illness (HPI)");
     write(hpi);
   }
-  if (row.clinicalSummary && row.clinicalSummary !== hpi) {
-    heading("Clinical Summary");
-    write(row.clinicalSummary);
-  }
-  if (row.aiInsight) {
-    heading("AI Insight");
-    write(row.aiInsight);
+
+  // --- Past Medical History ---
+  const pmh = [
+    ...splitToBullets(row.existingConditions),
+    ...splitToBullets(row.pastSurgicalHistory),
+  ];
+  if (pmh.length > 0) {
+    heading("Past Medical History (PMH)");
+    pmh.forEach((item) => write(`• ${item}`, { gap: 2 }));
+    y += 4;
   }
 
-  heading("Current Medication");
-  write("Medications reported by the patient during intake.", {
-    size: 9,
-    color: [100, 116, 139],
-    gap: 4,
-  });
-  if (row.currentMedications) {
-    write(row.currentMedications);
+  // --- Current Medications (reported by the patient at intake) ---
+  heading("Current Medications");
+  const currentMeds = splitToBullets(row.currentMedications);
+  if (currentMeds.length > 0) {
+    currentMeds.forEach((item) => write(`• ${item}`, { gap: 2 }));
+    y += 4;
   } else {
     write("No current medication reported.", { color: [148, 163, 184] });
   }
 
-  heading("Assessment");
-  write(`Current status: ${row.status}.`);
-
-  if (row.clinicalDiagnosis || row.treatmentNotes) {
-    heading("Clinical Diagnosis & Plan");
-    if (row.clinicalDiagnosis) write(row.clinicalDiagnosis);
-    if (row.treatmentNotes) write(`Treatment notes: ${row.treatmentNotes}`);
-  }
-
-  if (row.recommendedTests.length > 0) {
-    heading("Recommended Tests");
-    writeTwoColList(row.recommendedTests);
-  }
-
-  if (row.recommendedProcedures.length > 0) {
-    heading("Recommended Procedures");
-    writeTwoColList(row.recommendedProcedures);
-  }
-
-  heading("Medication");
+  // --- Prescribed Medications (from the GI specialist's plan) ---
   if (row.medications.length > 0) {
+    heading("Prescribed Medications");
     row.medications.forEach((item) => write(`• ${item}`, { gap: 2 }));
-  } else {
-    write("No medications reported.", { color: [148, 163, 184] });
-  }
-
-  if (row.assessmentPlanFiles.length > 0) {
-    heading("Assessment & Plan Files");
-    row.assessmentPlanFiles.forEach((group) => {
-      write(`${group.category}:`, { gap: 2 });
-      writeTwoColList(group.files);
-    });
     y += 4;
   }
 
-  if (row.giSpecialistPlan || row.otherRecommendations.length > 0) {
-    heading("Care Plan and Recommendations");
+  // --- Allergies ---
+  const allergies = splitToBullets(row.allergies);
+  if (allergies.length > 0) {
+    heading("Allergies");
+    allergies.forEach((item) => write(`• ${item}`, { gap: 2 }));
+    y += 4;
+  }
+
+  // --- Social History ---
+  const social = [
+    ...splitToBullets(row.socialHistory),
+    ...splitToBullets(row.lifestyleNotes),
+  ];
+  if (social.length > 0) {
+    heading("Social History");
+    social.forEach((item) => write(`• ${item}`, { gap: 2 }));
+    y += 4;
+  }
+
+  // --- Family History ---
+  const family = splitToBullets(row.familyHistory);
+  if (family.length > 0) {
+    heading("Family History");
+    family.forEach((item) => write(`• ${item}`, { gap: 2 }));
+    y += 4;
+  }
+
+  // --- Assessment & Differential Diagnosis ---
+  heading("Assessment & Differential Diagnosis");
+  if (row.clinicalDiagnosis) {
+    write(row.clinicalDiagnosis);
+  } else if (row.clinicalSummary) {
+    write(row.clinicalSummary);
+  } else {
+    write(`Current status: ${displayStatus(row.status)}.`);
+  }
+  if (row.treatmentNotes) write(`Treatment notes: ${row.treatmentNotes}`);
+  if (row.aiInsight) write(row.aiInsight, { color: [71, 85, 105] });
+
+  // --- Plan of Care ---
+  heading("Plan of Care");
+
+  const subhead = (label: string) =>
+    write(label, { bold: true, size: 10.5, color: [37, 99, 235], gap: 4 });
+
+  if (row.recommendedTests.length > 0 || row.recommendedProcedures.length > 0) {
+    subhead("Investigations");
+    writeTwoColList([...row.recommendedTests, ...row.recommendedProcedures]);
+  }
+
+  const recent = splitToBullets(row.recentTestsOrProcedures);
+  if (recent.length > 0) {
+    subhead("Recent Tests / Procedures");
+    recent.forEach((item) => write(`• ${item}`, { gap: 2 }));
+    y += 4;
+  }
+
+  if (row.otherRecommendations.length > 0 || row.giSpecialistPlan) {
+    subhead("Recommendations");
     if (row.giSpecialistPlan) write(row.giSpecialistPlan);
     row.otherRecommendations.forEach((item, i) => write(`${i + 1}. ${item}`, { gap: 2 }));
     y += 4;
   }
 
-  heading("Escalation Criteria");
-  write(
-    "Seek urgent clinical attention for worsening shortness of breath, persistent severe pain, confusion, sudden weakness, or any rapidly progressive symptoms."
-  );
+  // --- Assessment & Plan Files (card grid) ---
+  if (row.assessmentPlanFiles.length > 0) {
+    heading("Assessment & Plan Files");
+    drawFileCards(row.assessmentPlanFiles.flatMap((g) => g.files));
+  }
 
-  y += 6;
+  // --- Signature ---
+  y += 10;
   rule();
-  write("For urgent symptoms, call your clinic immediately or dial 911.", {
+  write("Electronically Reviewed & Signed", {
+    size: 9,
+    color: [100, 116, 139],
+    gap: 8,
+  });
+  write(row.giSpecialistName || "GI Specialist", {
+    bold: true,
+    size: 12,
+    color: [15, 23, 42],
+    gap: 2,
+  });
+  write(`Date: ${formatDate(row.sharedAt)}`, {
     size: 9,
     color: [100, 116, 139],
     gap: 0,
   });
 
-  // Top band + "Page X of Y" on every page (drawn last so the count is final).
+  // Top band + "Page X of Y" and a bottom contact band on every page (drawn
+  // last so the count is final).
   const pageCount = doc.getNumberOfPages();
   for (let p = 1; p <= pageCount; p++) {
     doc.setPage(p);
@@ -372,6 +499,13 @@ async function downloadReportPdf(row: GiSharedReport): Promise<void> {
     doc.setFontSize(9);
     doc.setTextColor(255, 255, 255);
     doc.text(`Page ${p} of ${pageCount}`, pageW - margin, 11, { align: "right" });
+
+    doc.setFillColor(74, 144, 226);
+    doc.rect(0, pageH - 20, pageW, 20, "F");
+    doc.setFontSize(8);
+    doc.setTextColor(255, 255, 255);
+    doc.text("(480) 666-3333", margin, pageH - 7);
+    doc.text("www.aigicare.com", pageW - margin, pageH - 7, { align: "right" });
   }
 
   const safeName =
@@ -679,7 +813,7 @@ export function ReportsView({
                             <td>#{row.caseShortCode}</td>
                             <td>
                               <span className="reports-pill reports-pill--done">
-                                {row.status}
+                                {displayStatus(row.status)}
                               </span>
                             </td>
                             <td>
@@ -927,39 +1061,155 @@ function ReportModal({
   );
 }
 
+// A bordered label/value grid (demographics, insurance) matching the GI
+// "Final Note" layout. Renders only the cells that have a value and returns
+// null when all are empty so the caller can omit the row entirely.
+function DetailGrid({
+  cells,
+  cols,
+  tone = "default",
+}: {
+  cells: { label: string; value: string | null | undefined }[];
+  cols: number;
+  tone?: "default" | "blue";
+}) {
+  const present = cells.filter((c) => c.value && String(c.value).trim());
+  if (present.length === 0) return null;
+  return (
+    <div
+      className={`rr-grid${tone === "blue" ? " rr-grid--blue" : ""}`}
+      style={{ gridTemplateColumns: `repeat(${cols}, minmax(0, 1fr))` }}
+    >
+      {present.map((c) => (
+        <div className="rr-cell" key={c.label}>
+          <span className="rr-cell__label">{c.label}</span>
+          <strong className="rr-cell__value">{c.value}</strong>
+        </div>
+      ))}
+    </div>
+  );
+}
+
+// A section rendered as a bulleted list, omitted when there are no items.
+function BulletSection({ title, items }: { title: string; items: string[] }) {
+  if (items.length === 0) return null;
+  return (
+    <section className="reports-modal-report__section">
+      <h3>{title}</h3>
+      <ul>
+        {items.map((it, i) => (
+          <li key={`${title}-${i}-${it}`}>{it}</li>
+        ))}
+      </ul>
+    </section>
+  );
+}
+
 function FinalReportBody({ row }: { row: GiSharedReport }) {
+  const age = ageFromDob(row.dateOfBirth);
   const symptomChips = splitSymptoms(row.presentingSymptoms);
+  const hpi = row.presentingSymptoms || row.clinicalSummary;
+  const chiefComplaint =
+    row.recommendedProcedures[0] || row.recommendedTests[0] || row.clinicalDiagnosis || "";
+
+  const pmh = [
+    ...splitToBullets(row.existingConditions),
+    ...splitToBullets(row.pastSurgicalHistory),
+  ];
+  const currentMeds = splitToBullets(row.currentMedications);
+  const allergies = splitToBullets(row.allergies);
+  const social = [
+    ...splitToBullets(row.socialHistory),
+    ...splitToBullets(row.lifestyleNotes),
+  ];
+  const family = splitToBullets(row.familyHistory);
+  const recent = splitToBullets(row.recentTestsOrProcedures);
+  const investigations = [...row.recommendedTests, ...row.recommendedProcedures];
+  const hasPlan =
+    investigations.length > 0 ||
+    recent.length > 0 ||
+    row.otherRecommendations.length > 0 ||
+    !!row.giSpecialistPlan;
+
   return (
     <article className="reports-modal-report">
-      <section className="reports-modal-report__meta">
-        <p>
-          <span>Patient</span>
-          <strong>{row.patientName}</strong>
-        </p>
-        <p>
-          <span>Case ID</span>
-          <strong>#{row.caseShortCode}</strong>
-        </p>
-        <p>
-          <span>Date finalized</span>
-          <strong>{formatDate(row.sharedAt)}</strong>
-        </p>
-        <p>
-          <span>GI User</span>
-          <strong>{row.giSpecialistName}</strong>
-        </p>
-        <p>
-          <span>Status</span>
-          <strong>{row.status}</strong>
-        </p>
-      </section>
+      {/* Provider / Primary Care Physician / Pharmacy */}
+      <div className="rr-cards">
+        <div className="rr-card">
+          <span className="rr-card__label">Provider</span>
+          <strong className="rr-card__name">{row.giSpecialistName || "GI Specialist"}</strong>
+          <span className="rr-card__line">GI Specialist</span>
+        </div>
+        <div className="rr-card">
+          <span className="rr-card__label">Primary Care Physician</span>
+          <strong className="rr-card__name">{row.primaryCarePhysician || "—"}</strong>
+          {row.pcpPhoneFax ? <span className="rr-card__line">{row.pcpPhoneFax}</span> : null}
+        </div>
+        <div className="rr-card">
+          <span className="rr-card__label">Pharmacy</span>
+          <strong className="rr-card__name">{row.pharmacyInformation || "—"}</strong>
+          {row.pharmacyPhoneFax ? (
+            <span className="rr-card__line">{row.pharmacyPhoneFax}</span>
+          ) : null}
+        </div>
+      </div>
 
-      {row.presentingSymptoms ? (
+      {/* Patient name */}
+      <h2 className="rr-patient-name">{row.patientName || "Patient"}</h2>
+
+      {/* Demographics */}
+      <DetailGrid
+        cols={4}
+        cells={[
+          { label: "Date of Birth", value: row.dateOfBirth ? formatDate(row.dateOfBirth) : "—" },
+          { label: "Age", value: age != null ? `${age} yrs` : "—" },
+          { label: "Sex", value: formatGender(row.gender) ?? "—" },
+          { label: "Phone", value: row.phone || "—" },
+        ]}
+      />
+      <DetailGrid
+        cols={3}
+        cells={[
+          { label: "BMI", value: row.bmi || "—" },
+          { label: "Email", value: row.email || "—" },
+          { label: "State", value: row.state ? usStateName(row.state) : "—" },
+        ]}
+      />
+      <DetailGrid cols={1} cells={[{ label: "Address", value: row.address }]} />
+
+      {/* Date of consultation */}
+      <p className="rr-consult">
+        Date of Consultation: <strong>{formatDate(row.sharedAt)}</strong>
+      </p>
+
+      {/* Chief complaint */}
+      {chiefComplaint ? (
+        <div className="rr-chief">
+          <span className="rr-chief__label">Chief Complaint</span>
+          <strong className="rr-chief__value">{chiefComplaint}</strong>
+        </div>
+      ) : null}
+
+      {/* Insurance */}
+      <DetailGrid
+        cols={4}
+        tone="blue"
+        cells={[
+          { label: "Insurance Carrier", value: row.insuranceCarrier },
+          { label: "Group Name", value: row.insuranceGroup },
+          { label: "Insurance ID", value: row.insurancePolicyId },
+          {
+            label: "Effective Date",
+            value: row.insuranceEffectiveDate ? formatDate(row.insuranceEffectiveDate) : null,
+          },
+        ]}
+      />
+
+      {/* History of Present Illness */}
+      {hpi ? (
         <section className="reports-modal-report__section">
-          <h3>Presenting symptoms (AI intake)</h3>
-          <p>
-            <strong>From the patient:</strong> {row.presentingSymptoms}
-          </p>
+          <h3>History of Present Illness (HPI)</h3>
+          <p style={{ whiteSpace: "pre-wrap" }}>{hpi}</p>
           {symptomChips.length > 0 ? (
             <div className="reports-symptom-chips">
               {symptomChips.map((symptom) => (
@@ -972,118 +1222,137 @@ function FinalReportBody({ row }: { row: GiSharedReport }) {
         </section>
       ) : null}
 
+      {/* Past Medical History */}
+      <BulletSection title="Past Medical History (PMH)" items={pmh} />
+
+      {/* Current Medications */}
       <section className="reports-modal-report__section">
-        <h3>Current Medication</h3>
+        <h3>Current Medications</h3>
         <p style={{ color: "#64748b", fontSize: 13, margin: "0 0 8px" }}>
           Medications reported by the patient during intake.
         </p>
-        {row.currentMedications ? (
-          <p style={{ whiteSpace: "pre-wrap" }}>{row.currentMedications}</p>
+        {currentMeds.length > 0 ? (
+          <ul>
+            {currentMeds.map((item, i) => (
+              <li key={`cmed-${i}-${item}`}>{item}</li>
+            ))}
+          </ul>
         ) : (
           <p style={{ color: "#94a3b8" }}>No current medication reported.</p>
         )}
       </section>
 
+      {/* Prescribed Medications (from the GI specialist's plan) */}
+      <BulletSection title="Prescribed Medications" items={row.medications} />
+
+      {/* Allergies */}
+      <BulletSection title="Allergies" items={allergies} />
+
+      {/* Social History */}
+      <BulletSection title="Social History" items={social} />
+
+      {/* Family History */}
+      <BulletSection title="Family History" items={family} />
+
+      {/* Assessment & Differential Diagnosis */}
       <section className="reports-modal-report__section">
-        <h3>Assessment</h3>
-        <p>
-          Current status: <strong>{row.status}</strong>.
-        </p>
-      </section>
-
-      {row.clinicalDiagnosis || row.treatmentNotes ? (
-        <section className="reports-modal-report__section">
-          <h3>Clinical Diagnosis &amp; Plan</h3>
-          {row.clinicalDiagnosis ? (
-            <p style={{ whiteSpace: "pre-wrap" }}>{row.clinicalDiagnosis}</p>
-          ) : null}
-          {row.treatmentNotes ? (
-            <p
-              style={{
-                whiteSpace: "pre-wrap",
-                marginTop: row.clinicalDiagnosis ? 8 : 0,
-              }}
-            >
-              <strong>Treatment notes: </strong>
-              {row.treatmentNotes}
-            </p>
-          ) : null}
-        </section>
-      ) : null}
-
-      {row.recommendedTests.length > 0 ? (
-        <section className="reports-modal-report__section">
-          <h3>Recommended Tests</h3>
-          <ul className="reports-list--two-col">
-            {row.recommendedTests.map((item, i) => (
-              <li key={`test-${i}-${item}`}>{item}</li>
-            ))}
-          </ul>
-        </section>
-      ) : null}
-
-      {row.recommendedProcedures.length > 0 ? (
-        <section className="reports-modal-report__section">
-          <h3>Recommended Procedures</h3>
-          <ul className="reports-list--two-col">
-            {row.recommendedProcedures.map((item, i) => (
-              <li key={`proc-${i}-${item}`}>{item}</li>
-            ))}
-          </ul>
-        </section>
-      ) : null}
-
-      <section className="reports-modal-report__section">
-        <h3>Medication</h3>
-        {row.medications.length > 0 ? (
-          <ul>
-            {row.medications.map((item, i) => (
-              <li key={`med-${i}-${item}`}>{item}</li>
-            ))}
-          </ul>
+        <h3>Assessment &amp; Differential Diagnosis</h3>
+        {row.clinicalDiagnosis ? (
+          <p style={{ whiteSpace: "pre-wrap" }}>{row.clinicalDiagnosis}</p>
+        ) : row.clinicalSummary ? (
+          <p style={{ whiteSpace: "pre-wrap" }}>{row.clinicalSummary}</p>
         ) : (
-          <p style={{ color: "#94a3b8" }}>No medications reported.</p>
+          <p>
+            Current status: <strong>{displayStatus(row.status)}</strong>.
+          </p>
         )}
+        {row.treatmentNotes ? (
+          <p style={{ whiteSpace: "pre-wrap", marginTop: 8 }}>
+            <strong>Treatment notes: </strong>
+            {row.treatmentNotes}
+          </p>
+        ) : null}
+        {row.aiInsight ? (
+          <p style={{ whiteSpace: "pre-wrap", marginTop: 8, color: "#475569" }}>
+            {row.aiInsight}
+          </p>
+        ) : null}
       </section>
 
+      {/* Plan of Care */}
+      {hasPlan ? (
+        <section className="reports-modal-report__section">
+          <h3>Plan of Care</h3>
+
+          {investigations.length > 0 ? (
+            <>
+              <p className="reports-modal-report__subhead">Investigations</p>
+              <ul className="reports-list--two-col">
+                {investigations.map((item, i) => (
+                  <li key={`inv-${i}-${item}`}>{item}</li>
+                ))}
+              </ul>
+            </>
+          ) : null}
+
+          {recent.length > 0 ? (
+            <>
+              <p className="reports-modal-report__subhead">Recent Tests / Procedures</p>
+              <ul>
+                {recent.map((item, i) => (
+                  <li key={`recent-${i}-${item}`}>{item}</li>
+                ))}
+              </ul>
+            </>
+          ) : null}
+
+          {row.otherRecommendations.length > 0 || row.giSpecialistPlan ? (
+            <>
+              <p className="reports-modal-report__subhead">Recommendations</p>
+              {row.giSpecialistPlan ? (
+                <p
+                  style={{
+                    whiteSpace: "pre-wrap",
+                    marginBottom: row.otherRecommendations.length > 0 ? 8 : 0,
+                  }}
+                >
+                  {row.giSpecialistPlan}
+                </p>
+              ) : null}
+              {row.otherRecommendations.length > 0 ? (
+                <ol>
+                  {row.otherRecommendations.map((item, i) => (
+                    <li key={`rec-${i}-${item}`}>{item}</li>
+                  ))}
+                </ol>
+              ) : null}
+            </>
+          ) : null}
+        </section>
+      ) : null}
+
+      {/* Assessment & Plan Files */}
       {row.assessmentPlanFiles.length > 0 ? (
         <section className="reports-modal-report__section">
           <h3>Assessment &amp; Plan Files</h3>
-          {row.assessmentPlanFiles.map((group) => (
-            <div key={group.category} style={{ marginBottom: 8 }}>
-              <p style={{ fontWeight: 600, margin: "4px 0" }}>{group.category}</p>
-              <ul className="reports-list--two-col">
-                {group.files.map((label, i) => (
-                  <li key={`${group.category}-${i}-${label}`}>{label}</li>
-                ))}
-              </ul>
-            </div>
-          ))}
+          <div className="rr-file-cards">
+            {row.assessmentPlanFiles.flatMap((group) =>
+              group.files.map((label, i) => (
+                <div className="rr-file-card" key={`${group.category}-${i}-${label}`}>
+                  {label}
+                </div>
+              ))
+            )}
+          </div>
         </section>
       ) : null}
 
-      {row.giSpecialistPlan || row.otherRecommendations.length > 0 ? (
-        <section className="reports-modal-report__section">
-          <h3>Care Plan and Recommendations</h3>
-          {row.giSpecialistPlan ? (
-            <p
-              style={{
-                whiteSpace: "pre-wrap",
-                marginBottom: row.otherRecommendations.length > 0 ? 8 : 0,
-              }}
-            >
-              {row.giSpecialistPlan}
-            </p>
-          ) : null}
-          {row.otherRecommendations.length > 0 ? (
-            <ol>
-              {row.otherRecommendations.map((item, i) => (
-                <li key={`rec-${i}-${item}`}>{item}</li>
-              ))}
-            </ol>
-          ) : null}
-        </section>
-      ) : null}
+      {/* Signature */}
+      <div className="rr-sign">
+        <p className="rr-sign__eyebrow">Electronically Reviewed &amp; Signed</p>
+        <strong className="rr-sign__name">{row.giSpecialistName || "GI Specialist"}</strong>
+        <p className="rr-sign__date">Date: {formatDate(row.sharedAt)}</p>
+      </div>
     </article>
   );
 }

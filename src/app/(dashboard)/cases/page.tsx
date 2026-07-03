@@ -1,4 +1,7 @@
 import "@/styles/cases.css";
+// Also load the create-case styles so the shared MedicationPicker (used in the
+// editable report popup) renders consistently with the create-case form.
+import "@/styles/create-case.css";
 
 import { readSessionUserId } from "@/lib/auth";
 import { loadCasesForOwner } from "@/lib/cases";

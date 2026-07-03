@@ -8,11 +8,11 @@
 export const SIGNUP_REQUESTS_COLLECTION = "signup_requests";
 
 // PCP-only staging collection for in-flight create-account attempts. The OTP
-// and submitted details live here (keyed by emailKey) until the email is
-// verified; only on a correct code do we write the record into the shared
-// `signup_requests` collection above. This keeps unverified attempts out of
-// the admin review queue. Documents here are short-lived and deleted on
-// successful verification.
+// and submitted details (including the already-hashed password) live here
+// (keyed by emailKey) until the email is verified; only on a correct code do we
+// create the real `pcp_users` account. This keeps unverified attempts from ever
+// creating a user. Documents here are short-lived and deleted on successful
+// verification.
 export const PCP_SIGNUP_OTP_COLLECTION = "pcp_signup_otps";
 
 // Identifies records created by this PCP portal within the shared collection.
@@ -49,12 +49,14 @@ export type SignupRequestDoc = {
 };
 
 // A staged (not-yet-verified) signup attempt held in PCP_SIGNUP_OTP_COLLECTION.
-// Carries just enough to verify the email and then materialize a
-// SignupRequestDoc once the OTP succeeds.
+// Carries just enough to verify the email and then create a pcp_users account
+// once the OTP succeeds. The password is stored pre-hashed (bcrypt) — never in
+// plaintext.
 export type StagedSignupOtpDoc = {
   fullName: string;
   email: string;
   phone: string;
+  passwordHash: string;
   otpCode: string;
   otpExpiresAt: string;
   otpAttempts: number;

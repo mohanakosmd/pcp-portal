@@ -1,5 +1,6 @@
 import Link from "next/link";
 
+import { LocalTime } from "@/app/(dashboard)/_components/LocalTime";
 import { readSessionUserId } from "@/lib/auth";
 import {
   PCP_CASES_COLLECTION,
@@ -258,6 +259,7 @@ export default async function DashboardPage() {
           </div>
         </article>
 
+        <Link className="dash-kpi-link" href="/cases">
         <article className="dash-kpi dash-kpi--progress">
           <div className="dash-kpi__mini dash-kpi__mini--progress" aria-hidden="true">
             <svg
@@ -315,7 +317,9 @@ export default async function DashboardPage() {
             <div className="dash-kpi__foot" />
           </div>
         </article>
+        </Link>
 
+        <Link className="dash-kpi-link" href="/reports">
         <article className="dash-kpi dash-kpi--completed">
           <div className="dash-kpi__mini dash-kpi__mini--completed" aria-hidden="true">
             <svg
@@ -376,6 +380,7 @@ export default async function DashboardPage() {
             <div className="dash-kpi__foot" />
           </div>
         </article>
+        </Link>
       </div>
 
       <div className="dash-grid">
@@ -395,6 +400,7 @@ export default async function DashboardPage() {
                     <th>Status</th>
                     <th>Last updated</th>
                     <th>Share</th>
+                    <th>Action</th>
                   </tr>
                 </thead>
                 <tbody>
@@ -410,8 +416,12 @@ export default async function DashboardPage() {
                         </span>
                       </td>
                       <td className="dash-datetime">
-                        <time dateTime={row.dateIso}>{row.dateLabel}</time>
-                        <span className="dash-datetime__time">{row.timeLabel}</span>
+                        <time dateTime={row.dateIso}>
+                          <LocalTime iso={row.dateIso} mode="date" fallback={row.dateLabel} />
+                        </time>
+                        <span className="dash-datetime__time">
+                          <LocalTime iso={row.dateIso} mode="time" fallback={row.timeLabel} />
+                        </span>
                       </td>
                       <td>
                         {row.status === "done" ? (
@@ -434,6 +444,29 @@ export default async function DashboardPage() {
                           >
                             {sendArrow}
                             <span>Send</span>
+                          </Link>
+                        )}
+                      </td>
+                      <td>
+                        {row.status === "done" ? (
+                          // Completed/closed → the GI report is ready to view.
+                          <Link
+                            className="dash-table__action"
+                            href={`/reports?q=${encodeURIComponent(row.id)}`}
+                            aria-label={`View report for request ${row.id}`}
+                          >
+                            {sendArrow}
+                            <span>View report</span>
+                          </Link>
+                        ) : (
+                          // Draft / pending / under review → open the case.
+                          <Link
+                            className="dash-table__action"
+                            href={`/cases?q=${encodeURIComponent(row.id)}`}
+                            aria-label={`View case ${row.id}`}
+                          >
+                            {sendArrow}
+                            <span>View case</span>
                           </Link>
                         )}
                       </td>

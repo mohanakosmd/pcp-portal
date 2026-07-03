@@ -646,6 +646,24 @@ html {
   border: 1px solid rgba(226, 232, 240, 0.85);
 }
 
+/* Clickable KPI cards (In progress → cases, Completed → reports). */
+.dash-kpi-link {
+  display: block;
+  text-decoration: none;
+  color: inherit;
+}
+
+.dash-kpi-link .dash-kpi {
+  height: 100%;
+  cursor: pointer;
+  transition: box-shadow 0.15s ease, transform 0.15s ease;
+}
+
+.dash-kpi-link:hover .dash-kpi {
+  transform: translateY(-1px);
+  box-shadow: 0 12px 26px -14px rgba(2, 6, 23, 0.3);
+}
+
 .dash-kpi__body {
   flex: 1;
   min-width: 0;

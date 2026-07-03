@@ -608,6 +608,199 @@
   color: #0f172a;
 }
 
+/* Sub-group heading inside the "Case Intake Details" section (Demographics /
+   Insurance / Medical history), sitting above each field grid. */
+.reports-modal-report__section .reports-modal-report__subhead {
+  margin: 14px 0 6px;
+  font-size: 12px;
+  font-weight: 700;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+  color: #475569;
+}
+
+.reports-modal-report__section .reports-modal-report__subhead:first-of-type {
+  margin-top: 2px;
+}
+
+/* ------------------------------------------------------------------ */
+/* GI "Final Note" report layout (report preview modal)               */
+/* ------------------------------------------------------------------ */
+
+/* Provider / Primary Care Physician / Pharmacy cards */
+.rr-cards {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 12px;
+}
+
+.rr-card {
+  display: flex;
+  flex-direction: column;
+  gap: 3px;
+  padding: 12px 14px;
+  border-radius: 10px;
+  background: #f8fafc;
+  border: 1px solid #e2e8f0;
+}
+
+.rr-card__label {
+  font-size: 10px;
+  font-weight: 700;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  color: #2563eb;
+}
+
+.rr-card__name {
+  font-size: 14px;
+  color: #0f172a;
+}
+
+.rr-card__line {
+  font-size: 12px;
+  color: #475569;
+}
+
+/* Patient name headline */
+.rr-patient-name {
+  margin: 4px 0 2px;
+  font-size: 22px;
+  font-weight: 800;
+  color: var(--dash-navy, #033672);
+}
+
+/* Bordered label/value grids (demographics, insurance) */
+.rr-grid {
+  display: grid;
+  gap: 8px;
+}
+
+.rr-cell {
+  display: flex;
+  flex-direction: column;
+  gap: 3px;
+  padding: 8px 12px;
+  border: 1px solid #e2e8f0;
+  border-radius: 8px;
+  background: #fff;
+  min-width: 0;
+}
+
+.rr-cell__label {
+  font-size: 10px;
+  font-weight: 700;
+  letter-spacing: 0.07em;
+  text-transform: uppercase;
+  color: #64748b;
+}
+
+.rr-cell__value {
+  font-size: 13px;
+  color: #0f172a;
+  overflow-wrap: break-word;
+}
+
+/* Blue-tinted insurance row */
+.rr-grid--blue .rr-cell {
+  background: #eff6ff;
+  border-color: #bfdbfe;
+}
+
+.rr-grid--blue .rr-cell__label {
+  color: #2563eb;
+}
+
+/* Date of consultation line */
+.rr-consult {
+  margin: 2px 0;
+  font-size: 13px;
+  color: #334155;
+}
+
+.rr-consult strong {
+  color: #0f172a;
+}
+
+/* Cream "Chief Complaint" box */
+.rr-chief {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  padding: 12px 16px;
+  border-radius: 10px;
+  background: #fef9e7;
+  border: 1px solid #fde68a;
+}
+
+.rr-chief__label {
+  font-size: 10px;
+  font-weight: 700;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  color: #a16207;
+}
+
+.rr-chief__value {
+  font-size: 15px;
+  color: #1e293b;
+}
+
+/* Assessment & Plan file cards */
+.rr-file-cards {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 10px;
+}
+
+.rr-file-card {
+  padding: 10px 14px;
+  border-radius: 8px;
+  background: #f8fafc;
+  border: 1px solid #bfdbfe;
+  font-size: 13px;
+  font-weight: 600;
+  color: #2563eb;
+}
+
+/* Signature block */
+.rr-sign {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  padding-top: 12px;
+  border-top: 1px solid #e2e8f0;
+}
+
+.rr-sign__eyebrow {
+  margin: 0;
+  font-size: 12px;
+  color: #64748b;
+}
+
+.rr-sign__name {
+  font-size: 15px;
+  color: #0f172a;
+}
+
+.rr-sign__date {
+  margin: 0;
+  font-size: 12px;
+  color: #64748b;
+}
+
+@media (max-width: 640px) {
+  .rr-cards {
+    grid-template-columns: 1fr;
+  }
+  .rr-grid {
+    grid-template-columns: 1fr !important;
+  }
+  .rr-file-cards {
+    grid-template-columns: 1fr;
+  }
+}
+
 .reports-modal-report__section {
   min-width: 0;
   border: 1px solid #e2e8f0;
