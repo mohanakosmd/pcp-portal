@@ -2,12 +2,14 @@ import "@/styles/create-case.css";
 
 import { readSessionUserId } from "@/lib/auth";
 import { PCP_CASES_COLLECTION, type CaseAboutDoc, type GenderEnum } from "@/lib/cases";
+import { PCP_USERS_COLLECTION } from "@/lib/firebase";
 import { getDocument, listDocuments } from "@/lib/firestore-rest";
 
 import {
   CreateCaseForm,
   type InitialCase,
   type InitialCaseDocument,
+  type PcpProfile,
 } from "../_components/CreateCaseForm";
 
 type Search = { caseId?: string };
@@ -18,8 +20,24 @@ export default async function CreateCasePage({
   searchParams: Promise<Search>;
 }) {
   const { caseId } = await searchParams;
-  const initialCase = caseId ? await loadInitialCase(caseId) : null;
-  return <CreateCaseForm initialCase={initialCase} />;
+  const [initialCase, pcpProfile] = await Promise.all([
+    caseId ? loadInitialCase(caseId) : Promise.resolve(null),
+    loadPcpProfile(),
+  ]);
+  return <CreateCaseForm initialCase={initialCase} pcpProfile={pcpProfile} />;
+}
+
+// The logged-in provider IS the PCP, so their own name and phone prefill the
+// "Primary Care Physician" fields on the Health step (a new case, or any PCP
+// field left blank on a resumed draft — see CreateCaseForm).
+async function loadPcpProfile(): Promise<PcpProfile | null> {
+  const userId = await readSessionUserId();
+  if (!userId) return null;
+  const user = await getDocument(PCP_USERS_COLLECTION, userId);
+  if (!user) return null;
+  const name = typeof user.data.name === "string" ? user.data.name : "";
+  const phone = typeof user.data.mobile === "string" ? user.data.mobile : "";
+  return { name, phone };
 }
 
 async function loadInitialCase(caseId: string): Promise<InitialCase | null> {

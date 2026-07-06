@@ -194,10 +194,19 @@ async function compressImage(file: File): Promise<File> {
   }
 }
 
+// The logged-in provider's own details, used to prefill the PCP fields on the
+// Health step (see create-case/page.tsx → loadPcpProfile).
+export type PcpProfile = {
+  name: string;
+  phone: string;
+};
+
 export function CreateCaseForm({
   initialCase = null,
+  pcpProfile = null,
 }: {
   initialCase?: InitialCase | null;
+  pcpProfile?: PcpProfile | null;
 }) {
   const router = useRouter();
   const [currentStep, setCurrentStep] = useState<StepNumber>(
@@ -234,11 +243,15 @@ export function CreateCaseForm({
   const [socialHistory, setSocialHistory] = useState(
     initialCase?.health.socialHistory ?? ""
   );
+  // Prefill the PCP fields from the logged-in provider's profile. A saved value
+  // on a resumed draft wins; otherwise (new case, or the field left blank) we
+  // fall back to the provider's own name/phone.
   const [primaryCarePhysician, setPrimaryCarePhysician] = useState(
-    initialCase?.health.primaryCarePhysician ?? ""
+    initialCase?.health.primaryCarePhysician || pcpProfile?.name || ""
   );
   const [pcpPhoneFax, setPcpPhoneFax] = useState(
-    initialCase?.health.pcpPhoneFax ?? ""
+    initialCase?.health.pcpPhoneFax ||
+      (pcpProfile?.phone ? formatUsPhone(pcpProfile.phone) : "")
   );
   const [pharmacyInformation, setPharmacyInformation] = useState(
     initialCase?.health.pharmacyInformation ?? ""
