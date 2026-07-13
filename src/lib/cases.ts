@@ -105,6 +105,41 @@ export type CaseHealthDoc = {
   updatedByUserId: string;
 };
 
+/**
+ * Structured, AI-generated decision support persisted on the pcp_cases root doc
+ * (field `aiSuggestions`) by the submit-time ai-summary pass. Intended to
+ * pre-populate a GI specialist's "Clinical Diagnosis & Plan" form. All values
+ * are suggestions for a clinician to confirm — never a prescription.
+ */
+/** One "Current Medications" row in the GI plan form. */
+export type CaseAiSuggestionMedication = {
+  name: string;
+  dosage: string;
+  frequency: string;
+};
+
+/**
+ * Maps 1:1 to the controls of the GI "Clinical Diagnosis & Plan" workspace so
+ * the stored value can pre-populate it directly. Every value is decision support
+ * for a clinician to confirm — never a prescription.
+ */
+export type CaseAiSuggestions = {
+  /** "Edit Diagnosis" textarea. */
+  diagnosis: string;
+  /** "Assessment & Plan Files" checkboxes — selected catalog ids. */
+  files: number[];
+  /** "Additional treatment notes" textarea (under the file list). */
+  treatmentNotes: string;
+  /** "Recommend Tests" checkboxes — slug ids from the test catalog. */
+  tests: string[];
+  /** "Recommended Procedures" checkboxes — slug ids from the procedure catalog. */
+  procedures: string[];
+  /** "Current Medications" rows. */
+  medications: CaseAiSuggestionMedication[];
+  /** When this suggestion set was generated (ISO). */
+  generatedAt: string;
+};
+
 /** Firestore push-id-style 20-char id (timestamp prefix + random). */
 export function generateCaseId(): string {
   const alphabet =
@@ -193,6 +228,55 @@ export function countCompleteHealth(health: Partial<CaseHealthDoc>): {
   };
 }
 
+/**
+ * Reads the `aiSuggestions` map off a case root doc into the typed shape, or
+ * null when absent/malformed. Tolerant of partial data — an older or partially
+ * written doc yields sensible empties rather than throwing.
+ */
+export function parseAiSuggestions(raw: unknown): CaseAiSuggestions | null {
+  if (!raw || typeof raw !== "object" || Array.isArray(raw)) return null;
+  const obj = raw as Record<string, unknown>;
+  const diagnosis = typeof obj.diagnosis === "string" ? obj.diagnosis : "";
+  const treatmentNotes = typeof obj.treatmentNotes === "string" ? obj.treatmentNotes : "";
+  const files = Array.isArray(obj.files)
+    ? obj.files.filter((n): n is number => typeof n === "number")
+    : [];
+  const tests = Array.isArray(obj.tests)
+    ? obj.tests.filter((t): t is string => typeof t === "string")
+    : [];
+  const procedures = Array.isArray(obj.procedures)
+    ? obj.procedures.filter((p): p is string => typeof p === "string")
+    : [];
+  const medications = Array.isArray(obj.medications)
+    ? obj.medications.flatMap((m) => {
+        if (!m || typeof m !== "object") return [];
+        const med = m as Record<string, unknown>;
+        const name = typeof med.name === "string" ? med.name : "";
+        if (!name) return [];
+        return [
+          {
+            name,
+            dosage: typeof med.dosage === "string" ? med.dosage : "",
+            frequency: typeof med.frequency === "string" ? med.frequency : "",
+          },
+        ];
+      })
+    : [];
+  const generatedAt = typeof obj.generatedAt === "string" ? obj.generatedAt : "";
+  // Nothing meaningful captured → treat as no suggestions.
+  if (
+    !diagnosis &&
+    !treatmentNotes &&
+    !files.length &&
+    !tests.length &&
+    !procedures.length &&
+    !medications.length
+  ) {
+    return null;
+  }
+  return { diagnosis, files, treatmentNotes, tests, procedures, medications, generatedAt };
+}
+
 export function deriveCaseTitle(opts: {
   fullLegalName?: string | null;
   inboxMessage?: string | null;
@@ -267,6 +351,11 @@ export type CaseListItem = {
   // inbox message.
   aiSummary: string | null;
   aiSummaryGeneratedAtIso: string | null;
+  // Gemini-generated, structured decision-support suggestions produced at submit
+  // time (provisional diagnosis, medications, and Assessment & Plan Files picked
+  // from the catalog). Meant to pre-populate a GI specialist's plan form. Null
+  // until generated. See CaseAiSuggestions.
+  aiSuggestions: CaseAiSuggestions | null;
   // Raw About values (empty string when missing) for in-place editing in the
   // report modal — distinct from the "—"-padded display fields above.
   editable: {
@@ -497,6 +586,7 @@ export async function loadCasesForOwner(
         typeof root.data.aiSummaryGeneratedAt === "string"
           ? root.data.aiSummaryGeneratedAt
           : null;
+      const aiSuggestions = parseAiSuggestions(root.data.aiSuggestions);
 
       return {
         id: root.id,
@@ -531,6 +621,7 @@ export async function loadCasesForOwner(
         hasFinalReport,
         aiSummary,
         aiSummaryGeneratedAtIso,
+        aiSuggestions,
         editable: {
           fullLegalName: typeof about.fullLegalName === "string" ? about.fullLegalName : "",
           gender: (about.gender as GenderEnum) ?? "",

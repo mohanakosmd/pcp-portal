@@ -7,27 +7,86 @@ import {
   useMemo,
   useRef,
   useState,
+  type Dispatch,
   type DragEvent,
   type FormEvent,
+  type RefObject,
+  type SetStateAction,
 } from "react";
 
 import { ageFromDob } from "@/lib/age";
 import { formatUsPhone, isValidUsPhone } from "@/lib/phone";
 import { US_STATES, phoneStateMismatch, usStateName } from "@/lib/us-area-codes";
 
+import { HPI_FIELDS, HpiExtractPanel, type HpiField } from "./HpiExtractPanel";
 import { MedicationPicker } from "./MedicationPicker";
+import { useSpeechToText } from "./useSpeechToText";
 
 type StepNumber = 1 | 2 | 3;
+
+/**
+ * Health fields that support dictation. Free text only — BMI is numeric and the
+ * phone/fax fields are digit strings, so speech would produce garbage in both.
+ */
+type DictationField =
+  | "inboxMessage"
+  | "allergies"
+  | "pastSurgicalHistory"
+  | "socialHistory"
+  | "pharmacyInformation";
+
+/** Spoken-aloud names for the mic buttons' aria-labels. */
+const HEALTH_FIELD_NAMES: Record<DictationField, string> = {
+  inboxMessage: "Reason for Consultation",
+  allergies: "Allergies",
+  pastSurgicalHistory: "Past Surgical History",
+  socialHistory: "Social History",
+  pharmacyInformation: "Pharmacy Information",
+};
+
+function MicIcon() {
+  return (
+    <svg width="22" height="22" viewBox="0 0 24 24" fill="none" aria-hidden="true">
+      <rect x="9" y="4" width="6" height="10" rx="3" stroke="currentColor" strokeWidth="1.9" />
+      <path
+        d="M6.5 11.5V12a5.5 5.5 0 0011 0v-.5"
+        stroke="currentColor"
+        strokeWidth="1.9"
+        strokeLinecap="round"
+      />
+      <path d="M12 17.5V21" stroke="currentColor" strokeWidth="1.9" strokeLinecap="round" />
+      <path d="M9 21h6" stroke="currentColor" strokeWidth="1.9" strokeLinecap="round" />
+    </svg>
+  );
+}
 
 // The three document upload widgets, each validated/highlighted independently.
 type DocSection = "primary" | "lab" | "other";
 type DocErrorMap = Record<DocSection, string[]>;
 
 const STEPS: { id: StepNumber; label: string }[] = [
-  { id: 1, label: "About you" },
+  { id: 1, label: "Patient details" },
   { id: 2, label: "Health" },
   { id: 3, label: "Files" },
 ];
+
+/**
+ * Red asterisk placed before a mandatory field's name. Purely visual — the
+ * input itself carries `required`, which is what screen readers announce, so
+ * the glyph is hidden from the accessibility tree to avoid a doubled cue.
+ */
+function Req() {
+  return (
+    <span className="cc-req" aria-hidden="true">
+      *
+    </span>
+  );
+}
+
+/** "(Optional)" suffix on fields that can be left blank. */
+function Opt() {
+  return <span className="cc-optional">(Optional)</span>;
+}
 
 const NEXT_LABELS: Record<StepNumber, string> = {
   1: "Next: Medical history",
@@ -136,6 +195,7 @@ function formatExistingDocLabel(kind: string, contentType: string): string {
     lab: "Lab report",
     imaging: "Imaging",
     note: "Note",
+    hpi_history: "HPI history",
     other: "Document",
   };
   if (kinds[kind]) return kinds[kind];
@@ -259,8 +319,10 @@ export function CreateCaseForm({
   const [pharmacyPhoneFax, setPharmacyPhoneFax] = useState(
     initialCase?.health.pharmacyPhoneFax ?? ""
   );
-  const [speechStatus, setSpeechStatus] = useState("Speech input is ready. You can type anytime.");
-  const [isListening, setIsListening] = useState(false);
+  // HPI History document: the HpiExtractPanel owns the parse/review workflow and
+  // hands the staged file up via onFileChange. Held here so it's uploaded (like
+  // the insurance cards) on save/submit.
+  const [hpiFile, setHpiFile] = useState<File | null>(null);
   const fileInputRef = useRef<HTMLInputElement | null>(null);
   const mainRef = useRef<HTMLElement | null>(null);
   const formRef = useRef<HTMLFormElement | null>(null);
@@ -456,15 +518,16 @@ export function CreateCaseForm({
   /**
    * Per-field validation for the Health step (Step 2). Returns a
    * { fieldKey: message } map (empty when valid) so messages render inline under
-   * each field, matching Step 1. The inbox message is required to advance/submit
-   * (requireInbox); BMI, when provided, must be a plausible number. Every other
-   * Health field is optional free text. Step 3 (Files) has no required fields.
+   * each field, matching Step 1. The reason for consultation is required to
+   * advance/submit (requireInbox); BMI, when provided, must be a plausible number.
+   * Every other Health field is optional free text (pharmacy, allergies, social
+   * history included). Step 3 (Files) has no required fields.
    */
   function healthFieldErrors(opts: { requireInbox: boolean }): Record<string, string> {
     const errs: Record<string, string> = {};
 
     if (opts.requireInbox && !inboxMessage.trim()) {
-      errs.inboxMessage = "Add your Health inbox message before continuing.";
+      errs.inboxMessage = "Add the reason for consultation before continuing.";
     }
 
     const bmiVal = bmi.trim();
@@ -570,6 +633,20 @@ export function CreateCaseForm({
     // Clear picked files once uploaded so re-visiting Step 1 doesn't
     // re-upload the same images.
     setInsuranceFiles({ front: null, back: null });
+  }
+
+  /**
+   * Attaches the Step 2 HPI History document, if one was picked. The extracted
+   * values are already in the Health fields by this point — this preserves the
+   * source document alongside them so a reviewer can check the parse.
+   */
+  async function uploadHpiDocument(id: string): Promise<void> {
+    if (!hpiFile) return;
+    const result = await uploadOneFile(id, hpiFile, "hpi_history");
+    if (!result.ok) throw new Error(result.error || "HPI document upload failed.");
+    // Clear the staged file so a later save doesn't attach a second copy. The
+    // extraction panel stays as-is — it documents what was applied.
+    setHpiFile(null);
   }
 
   // Next advances ONLY when the current part is complete. Nothing is written
@@ -689,6 +766,7 @@ export function CreateCaseForm({
     // Insurance cards first so about/data.insuranceCards is populated before
     // the About PATCH reads/preserves it.
     await uploadInsuranceCards(id);
+    await uploadHpiDocument(id);
 
     const aboutRes = await callJson("/api/cases/" + id + "/about", {
       method: "PATCH",
@@ -700,7 +778,7 @@ export function CreateCaseForm({
       throw new Error(
         errorFrom(
           aboutRes.data,
-          `Could not save the About details (error ${aboutRes.status}). Please review Step 1 (About you) and try again.`
+          `Could not save the Patient details (error ${aboutRes.status}). Please review Step 1 (Patient details) and try again.`
         )
       );
     }
@@ -907,188 +985,98 @@ export function CreateCaseForm({
     }
   };
 
-  type SpeechRecognitionResult = {
-    transcript: string;
-  };
-  type SpeechRecognitionAlternatives = ArrayLike<SpeechRecognitionResult> & {
-    isFinal?: boolean;
-  };
-  type SpeechRecognitionEvent = Event & {
-    resultIndex: number;
-    results: ArrayLike<SpeechRecognitionAlternatives>;
-  };
-  type SpeechRecognitionErrorEvent = Event & { error?: string };
-  type SpeechRecognitionLike = {
-    lang: string;
-    continuous: boolean;
-    interimResults: boolean;
-    maxAlternatives: number;
-    start: () => void;
-    stop: () => void;
-    abort: () => void;
-    addEventListener: (
-      type: "result" | "error" | "end" | "start",
-      // eslint-disable-next-line @typescript-eslint/no-explicit-any
-      listener: (event: any) => void
-    ) => void;
-  };
-  type SpeechRecognitionConstructor = new () => SpeechRecognitionLike;
+  // ---- Speak-to-Text ------------------------------------------------------
+  // One recognizer serves every dictatable Health field. `dictationField` is the
+  // field the mic is currently bound to; finalized transcript chunks are
+  // appended to it. Reading it through a ref keeps the hook's onFinalText
+  // callback stable, so the recognizer isn't torn down between fields.
+  const [dictationField, setDictationField] = useState<DictationField | null>(null);
+  const dictationFieldRef = useRef<DictationField | null>(null);
 
-  const recognitionRef = useRef<SpeechRecognitionLike | null>(null);
-  const listeningRef = useRef(false);
-  const [speechSupported, setSpeechSupported] = useState(true);
+  const dictationSetters = useMemo(
+    (): Record<DictationField, Dispatch<SetStateAction<string>>> => ({
+      inboxMessage: setInboxMessage,
+      allergies: setAllergies,
+      pastSurgicalHistory: setPastSurgicalHistory,
+      socialHistory: setSocialHistory,
+      pharmacyInformation: setPharmacyInformation,
+    }),
+    []
+  );
 
-  useEffect(() => {
-    const w = window as typeof window & {
-      SpeechRecognition?: SpeechRecognitionConstructor;
-      webkitSpeechRecognition?: SpeechRecognitionConstructor;
-    };
-    const Ctor = w.SpeechRecognition || w.webkitSpeechRecognition;
-    if (!Ctor) {
-      setSpeechSupported(false);
-      setSpeechStatus(
-        "Speak-to-Text is not supported in this browser. Please type your message."
+  const appendDictation = useCallback(
+    (text: string) => {
+      const target = dictationFieldRef.current;
+      if (!target) return;
+      dictationSetters[target]((prev) =>
+        prev ? `${prev.replace(/\s+$/, "")} ${text}` : text
       );
-      return;
-    }
-    const recognition = new Ctor();
-    recognition.lang = "en-US";
-    // Continuous + interim so the user can dictate multiple sentences without
-    // re-clicking, and partial results show up immediately as visible feedback.
-    recognition.continuous = true;
-    recognition.interimResults = true;
-    recognition.maxAlternatives = 1;
+      if (target === "inboxMessage") clearFieldError("inboxMessage");
+    },
+    [dictationSetters, clearFieldError]
+  );
 
-    recognition.addEventListener("start", () => {
-      listeningRef.current = true;
-      setIsListening(true);
-      setSpeechStatus("Listening… click the mic again to stop.");
-    });
+  const {
+    supported: speechSupported,
+    listening: isListening,
+    status: speechStatus,
+    toggle: toggleSpeech,
+  } = useSpeechToText(appendDictation);
 
-    recognition.addEventListener("result", (event: SpeechRecognitionEvent) => {
-      // Walk only the new results since the last event (resultIndex onwards),
-      // append finalized text to the textarea, keep the interim chunk visible
-      // as a status hint so the user sees what's being heard live.
-      let finalText = "";
-      let interimText = "";
-      for (let i = event.resultIndex; i < event.results.length; i++) {
-        const alt = event.results[i];
-        const transcript = alt?.[0]?.transcript ?? "";
-        if (alt?.isFinal) finalText += transcript;
-        else interimText += transcript;
-      }
-      const finalized = finalText.trim();
-      if (finalized) {
-        setInboxMessage((prev) =>
-          prev ? `${prev.replace(/\s+$/, "")} ${finalized}` : finalized
-        );
-      }
-      const interim = interimText.trim();
-      if (interim) {
-        setSpeechStatus(`Listening… "${interim}"`);
-      } else if (finalized) {
-        setSpeechStatus("Listening… keep talking, or click the mic to stop.");
-      }
-    });
-
-    recognition.addEventListener("error", (event: SpeechRecognitionErrorEvent) => {
-      const code = event.error || "";
-      if (code === "no-speech") {
-        setSpeechStatus("Didn't catch that. Click the mic to try again.");
-      } else if (code === "not-allowed" || code === "service-not-allowed") {
-        setSpeechStatus(
-          "Microphone is blocked. Click the lock or 🎤 icon in your browser's address bar, set Microphone to Allow for this site, then click the mic again."
-        );
-      } else if (code === "aborted") {
-        setSpeechStatus("Speech capture stopped.");
-      } else if (code === "audio-capture") {
-        setSpeechStatus(
-          "No microphone was detected. Plug one in (or check OS sound settings) and try again."
-        );
-      } else if (code === "network") {
-        setSpeechStatus("Speech service couldn't reach the network. Check your connection.");
-      } else {
-        setSpeechStatus("Speech capture failed. Please type your message.");
-      }
-    });
-
-    recognition.addEventListener("end", () => {
-      listeningRef.current = false;
-      setIsListening(false);
-      setSpeechStatus((prev) =>
-        prev.startsWith("Listening")
-          ? "Speech captured. Click the mic to dictate again."
-          : prev
-      );
-    });
-
-    recognitionRef.current = recognition;
-
-    return () => {
-      // Stop any in-flight recognition when the component unmounts.
-      try {
-        if (listeningRef.current) recognition.abort();
-      } catch {
-        // best effort
-      }
-    };
-  }, []);
-
-  const handleStartSpeech = async () => {
-    const recognition = recognitionRef.current;
-    if (!recognition) return;
-    // Toggle: clicking the mic while it's listening stops the capture.
-    if (listeningRef.current) {
-      try {
-        recognition.stop();
-      } catch {
-        // ignore
-      }
-      return;
-    }
-    // Speech Recognition needs a secure context. http:// (other than
-    // localhost) won't get a prompt at all — surface that clearly.
-    if (typeof window !== "undefined" && !window.isSecureContext) {
-      setSpeechStatus(
-        "Speech input needs a secure (https://) connection. Reload over https or use localhost."
-      );
-      return;
-    }
-    // Force a fresh permission prompt before kicking off SpeechRecognition.
-    // SpeechRecognition's own prompt is finicky on some browsers when a
-    // previous denial is cached; getUserMedia gives a clean, predictable one
-    // and lets us surface a clear error message before the recognizer fires.
-    try {
-      if (
-        typeof navigator !== "undefined" &&
-        navigator.mediaDevices?.getUserMedia
-      ) {
-        const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
-        // Don't actually keep the stream — SpeechRecognition opens its own.
-        stream.getTracks().forEach((t) => t.stop());
-      }
-    } catch (err) {
-      const name = (err as { name?: string })?.name ?? "";
-      if (name === "NotAllowedError" || name === "SecurityError") {
-        setSpeechStatus(
-          "Microphone is blocked. Click the lock or 🎤 icon in your browser's address bar, set Microphone to Allow for this site, then click the mic again."
-        );
+  // Binding the mic to a field is a two-step handoff: point the ref at the
+  // field, then start. Stopping leaves `dictationField` set so the closing
+  // status message ("Speech captured…") stays under the field it belongs to.
+  const handleToggleDictation = useCallback(
+    (field: DictationField) => {
+      if (isListening) {
+        // Mics on other fields are disabled while one is live, so this can only
+        // be the active field's own mic — stop it.
+        void toggleSpeech();
         return;
       }
-      if (name === "NotFoundError" || name === "OverconstrainedError") {
-        setSpeechStatus(
-          "No microphone was detected. Plug one in (or check OS sound settings) and try again."
-        );
-        return;
+      dictationFieldRef.current = field;
+      setDictationField(field);
+      void toggleSpeech();
+    },
+    [isListening, toggleSpeech]
+  );
+
+  // The Step 2 Health field setters, keyed for HpiExtractPanel's onApply. Reads
+  // the current values it needs from the same state below.
+  const hpiApply = useCallback(
+    (values: Partial<Record<HpiField, string>>) => {
+      const setters: Record<HpiField, (v: string) => void> = {
+        allergies: setAllergies,
+        currentMedications: setCurrentMedications,
+        pastSurgicalHistory: setPastSurgicalHistory,
+        socialHistory: setSocialHistory,
+        pharmacyInformation: setPharmacyInformation,
+        pharmacyPhoneFax: setPharmacyPhoneFax,
+        primaryCarePhysician: setPrimaryCarePhysician,
+        pcpPhoneFax: setPcpPhoneFax,
+        bmi: setBmi,
+      };
+      for (const key of HPI_FIELDS) {
+        const v = values[key];
+        if (v !== undefined) setters[key](v);
       }
-      // Other errors (NotReadableError, etc.) — let recognition.start() try
-      // and produce its own error event.
-    }
-    try {
-      recognition.start();
-    } catch {
-      setSpeechStatus("Unable to start speech capture. Please try again or type manually.");
-    }
+      // BMI is the one extracted field with its own validation rule; a document
+      // with an implausible number shouldn't leave a stale error showing.
+      if (values.bmi !== undefined) clearFieldError("bmi");
+    },
+    [clearFieldError]
+  );
+
+  const hpiCurrentValues: Record<HpiField, string> = {
+    allergies,
+    currentMedications,
+    pastSurgicalHistory,
+    socialHistory,
+    pharmacyInformation,
+    pharmacyPhoneFax,
+    primaryCarePhysician,
+    pcpPhoneFax,
+    bmi,
   };
 
   const nextLabel = NEXT_LABELS[currentStep];
@@ -1266,7 +1254,11 @@ export function CreateCaseForm({
           speechStatus={speechStatus}
           speechSupported={speechSupported}
           isListening={isListening}
-          onStartSpeech={handleStartSpeech}
+          dictationField={dictationField}
+          onToggleDictation={handleToggleDictation}
+          hpiCurrentValues={hpiCurrentValues}
+          onHpiApply={hpiApply}
+          onHpiFileChange={setHpiFile}
           errors={fieldErrors}
         />
         <Step3Panel
@@ -1435,14 +1427,17 @@ function Step1Panel({
 
             <div className="cc-form-section">
               <h3 className="cc-form-section__title" id="cc-section-about">
-                About you
+                Patient details
               </h3>
               <div
                 className="cc-grid cc-grid--2 cc-step1-fields"
                 aria-labelledby="cc-section-about"
               >
                 <div className="cc-field cc-step1-field-full">
-                  <label htmlFor="cc-full-name">Full legal name</label>
+                  <label htmlFor="cc-full-name">
+                    <Req />
+                    Full legal name
+                  </label>
                   <input
                     className="cc-input"
                     id="cc-full-name"
@@ -1456,7 +1451,10 @@ function Step1Panel({
                   {fieldError("fullLegalName")}
                 </div>
                 <div className="cc-field">
-                  <label htmlFor="cc-gender">Gender</label>
+                  <label htmlFor="cc-gender">
+                    <Req />
+                    Gender
+                  </label>
                   <select
                     className="cc-select"
                     id="cc-gender"
@@ -1475,7 +1473,10 @@ function Step1Panel({
                   {fieldError("gender")}
                 </div>
                 <div className="cc-field">
-                  <label htmlFor="cc-dob">Date of birth</label>
+                  <label htmlFor="cc-dob">
+                    <Req />
+                    Date of birth
+                  </label>
                   <input
                     className="cc-input"
                     id="cc-dob"
@@ -1495,7 +1496,10 @@ function Step1Panel({
                   {fieldError("dateOfBirth")}
                 </div>
                 <div className="cc-field">
-                  <label htmlFor="cc-state">State</label>
+                  <label htmlFor="cc-state">
+                    <Req />
+                    State
+                  </label>
                   <select
                     className="cc-select"
                     id="cc-state"
@@ -1514,7 +1518,10 @@ function Step1Panel({
                   {fieldError("state")}
                 </div>
                 <div className="cc-field cc-step1-field-full">
-                  <label htmlFor="cc-address">Patient address</label>
+                  <label htmlFor="cc-address">
+                    <Req />
+                    Patient address
+                  </label>
                   <input
                     className="cc-input"
                     id="cc-address"
@@ -1533,7 +1540,10 @@ function Step1Panel({
             <div className="cc-form-section">
               <div className="cc-grid cc-grid--2 cc-step1-fields">
                 <div className="cc-field">
-                  <label htmlFor="cc-phone">Mobile or home phone</label>
+                  <label htmlFor="cc-phone">
+                    <Req />
+                    Mobile or home phone
+                  </label>
                   <input
                     className="cc-input"
                     id="cc-phone"
@@ -1551,7 +1561,10 @@ function Step1Panel({
                   {fieldError("mobile")}
                 </div>
                 <div className="cc-field">
-                  <label htmlFor="cc-email">Email</label>
+                  <label htmlFor="cc-email">
+                    <Req />
+                    Email
+                  </label>
                   <input
                     className="cc-input"
                     id="cc-email"
@@ -1573,7 +1586,7 @@ function Step1Panel({
 
             <div className="cc-form-section">
               <h3 className="cc-form-section__title" id="cc-section-insurance">
-                Insurance information
+                Patient Insurance Details
               </h3>
               <div
                 className="cc-grid cc-grid--2 cc-step1-fields"
@@ -1581,7 +1594,9 @@ function Step1Panel({
                 aria-labelledby="cc-section-insurance"
               >
                 <div className="cc-field">
-                  <label htmlFor="cc-insurance-carrier">Insurance carrier</label>
+                  <label htmlFor="cc-insurance-carrier">
+                    Insurance carrier <Opt />
+                  </label>
                   <input
                     className="cc-input"
                     id="cc-insurance-carrier"
@@ -1592,7 +1607,9 @@ function Step1Panel({
                   />
                 </div>
                 <div className="cc-field">
-                  <label htmlFor="cc-policy-id">Policy ID</label>
+                  <label htmlFor="cc-policy-id">
+                    Policy ID <Opt />
+                  </label>
                   <input
                     className="cc-input"
                     id="cc-policy-id"
@@ -1603,7 +1620,9 @@ function Step1Panel({
                   />
                 </div>
                 <div className="cc-field">
-                  <label htmlFor="cc-group-name">Group name</label>
+                  <label htmlFor="cc-group-name">
+                    Group name <Opt />
+                  </label>
                   <input
                     className="cc-input"
                     id="cc-group-name"
@@ -1614,7 +1633,9 @@ function Step1Panel({
                   />
                 </div>
                 <div className="cc-field">
-                  <label htmlFor="cc-insurance-effective-date">Effective date</label>
+                  <label htmlFor="cc-insurance-effective-date">
+                    Effective date <Opt />
+                  </label>
                   <input
                     className="cc-input"
                     id="cc-insurance-effective-date"
@@ -1627,7 +1648,9 @@ function Step1Panel({
 
               <div className="cc-grid cc-grid--2 cc-step1-fields cc-insurance-upload-grid">
                 <div className="cc-field">
-                  <label htmlFor="cc-insurance-front">Front side</label>
+                  <label htmlFor="cc-insurance-front">
+                    Front side <Opt />
+                  </label>
                   <InsuranceUploadTile
                     inputId="cc-insurance-front"
                     inputName="insurance_front"
@@ -1638,7 +1661,9 @@ function Step1Panel({
                   />
                 </div>
                 <div className="cc-field">
-                  <label htmlFor="cc-insurance-back">Back side</label>
+                  <label htmlFor="cc-insurance-back">
+                    Back side <Opt />
+                  </label>
                   <InsuranceUploadTile
                     inputId="cc-insurance-back"
                     inputName="insurance_back"
@@ -1800,7 +1825,11 @@ type Step2PanelProps = {
   speechStatus: string;
   speechSupported: boolean;
   isListening: boolean;
-  onStartSpeech: () => void;
+  dictationField: DictationField | null;
+  onToggleDictation: (field: DictationField) => void;
+  hpiCurrentValues: Record<HpiField, string>;
+  onHpiApply: (values: Partial<Record<HpiField, string>>) => void;
+  onHpiFileChange: (file: File | null) => void;
   errors: Record<string, string>;
 };
 
@@ -1829,7 +1858,11 @@ function Step2Panel({
   speechStatus,
   speechSupported,
   isListening,
-  onStartSpeech,
+  dictationField,
+  onToggleDictation,
+  hpiCurrentValues,
+  onHpiApply,
+  onHpiFileChange,
   errors,
 }: Step2PanelProps) {
   const fieldError = (key: string) =>
@@ -1838,6 +1871,44 @@ function Step2Panel({
         {errors[key]}
       </span>
     ) : null;
+
+  /** Mic + its status line, bound to one dictatable field. */
+  const dictation = (field: DictationField) => {
+    const active = isListening && dictationField === field;
+    return (
+      <>
+        <div className="cc-speech-action-row">
+          <button
+            type="button"
+            className={`cc-speech-btn${active ? " cc-speech-btn--listening" : ""}`}
+            aria-label={
+              active
+                ? `Stop dictating ${HEALTH_FIELD_NAMES[field]}`
+                : `Dictate ${HEALTH_FIELD_NAMES[field]}`
+            }
+            aria-pressed={active}
+            title={active ? "Stop recording" : "Speak-to-Text"}
+            onClick={() => onToggleDictation(field)}
+            // While one field is being dictated, the other mics are inert —
+            // the recognizer is single-track, so a second one would hijack it.
+            disabled={!speechSupported || (isListening && !active)}
+          >
+            <MicIcon />
+          </button>
+        </div>
+        {/* One status line at a time: the field being dictated, or — when the
+            browser has no recognizer at all — a single notice on the first
+            field rather than the same sentence repeated five times. */}
+        {dictationField === field ||
+        (!speechSupported && dictationField === null && field === "inboxMessage") ? (
+          <p className="cc-field-hint" aria-live="polite">
+            {speechStatus}
+          </p>
+        ) : null}
+      </>
+    );
+  };
+
   return (
     <div
       className={`cc-panel cc-panel--step2${active ? " is-active" : ""}`}
@@ -1867,12 +1938,12 @@ function Step2Panel({
             <div className="dash-card__head cc-step1-card__head cc-step1-card__head--ruled">
               <div className="cc-step1-card__head-main">
                 <h2 id="cc-health-inbox-heading" className="cc-step1-card__title">
-                  Health inbox
+                  Reason for Consultation
                 </h2>
               </div>
               <p className="cc-step1-card__lede cc-step1-card__head-copy">
-                Use Inbox to share symptoms with your GI specialist. You can speak or type your
-                message.
+                Share why the patient is being referred to your GI specialist. You can speak or
+                type your message.
               </p>
             </div>
 
@@ -1887,7 +1958,7 @@ function Step2Panel({
                 />
               </svg>
               <span>
-                Select Inbox and send your health details. You can use Speak-to-Text or type
+                Describe the reason for consultation. You can use Speak-to-Text or type
                 manually.
               </span>
             </div>
@@ -1904,7 +1975,8 @@ function Step2Panel({
                 className="cc-medical-details__section-label"
                 htmlFor="cc-inbox-message"
               >
-                Inbox message
+                <Req />
+                Reason for Consultation
               </label>
               <textarea
                 id="cc-inbox-message"
@@ -1916,51 +1988,13 @@ function Step2Panel({
                 onChange={(e) => onInboxChange(e.target.value)}
                 aria-invalid={errors.inboxMessage ? true : undefined}
               />
-              <div className="cc-speech-action-row">
-                <button
-                  type="button"
-                  className={`cc-speech-btn${isListening ? " cc-speech-btn--listening" : ""}`}
-                  aria-label={isListening ? "Stop speech to text" : "Start speech to text"}
-                  aria-pressed={isListening}
-                  title={isListening ? "Stop recording" : "Speak-to-Text"}
-                  onClick={onStartSpeech}
-                  disabled={!speechSupported}
-                >
-                  <svg width="22" height="22" viewBox="0 0 24 24" fill="none" aria-hidden="true">
-                    <rect
-                      x="9"
-                      y="4"
-                      width="6"
-                      height="10"
-                      rx="3"
-                      stroke="currentColor"
-                      strokeWidth="1.9"
-                    />
-                    <path
-                      d="M6.5 11.5V12a5.5 5.5 0 0011 0v-.5"
-                      stroke="currentColor"
-                      strokeWidth="1.9"
-                      strokeLinecap="round"
-                    />
-                    <path
-                      d="M12 17.5V21"
-                      stroke="currentColor"
-                      strokeWidth="1.9"
-                      strokeLinecap="round"
-                    />
-                    <path d="M9 21h6" stroke="currentColor" strokeWidth="1.9" strokeLinecap="round" />
-                  </svg>
-                </button>
-              </div>
-              <p className="cc-field-hint" aria-live="polite">
-                {speechStatus}
-              </p>
+              {dictation("inboxMessage")}
               {fieldError("inboxMessage")}
             </div>
 
             <div className="cc-field cc-field--clinical-block">
               <label className="cc-medical-details__section-label">
-                Current Medication
+                Current Medication <Opt />
               </label>
               <MedicationPicker
                 value={currentMedications}
@@ -1990,7 +2024,9 @@ function Step2Panel({
             <div className="cc-form-section">
               <div className="cc-grid cc-grid--2 cc-step1-fields">
                 <div className="cc-field">
-                  <label htmlFor="cc-bmi">BMI</label>
+                  <label htmlFor="cc-bmi">
+                    BMI <Opt />
+                  </label>
                   <input
                     className="cc-input"
                     id="cc-bmi"
@@ -2005,7 +2041,9 @@ function Step2Panel({
                   {fieldError("bmi")}
                 </div>
                 <div className="cc-field">
-                  <label htmlFor="cc-pcp">Primary Care Physician (PCP)</label>
+                  <label htmlFor="cc-pcp">
+                    Primary Care Physician (PCP) <Opt />
+                  </label>
                   <input
                     className="cc-input"
                     id="cc-pcp"
@@ -2017,7 +2055,9 @@ function Step2Panel({
                   />
                 </div>
                 <div className="cc-field">
-                  <label htmlFor="cc-pcp-phone-fax">PCP Phone &amp; Fax</label>
+                  <label htmlFor="cc-pcp-phone-fax">
+                    PCP Phone &amp; Fax <Opt />
+                  </label>
                   <input
                     className="cc-input"
                     id="cc-pcp-phone-fax"
@@ -2029,7 +2069,9 @@ function Step2Panel({
                   />
                 </div>
                 <div className="cc-field">
-                  <label htmlFor="cc-pharmacy-phone-fax">Pharmacy Phone &amp; Fax</label>
+                  <label htmlFor="cc-pharmacy-phone-fax">
+                    Pharmacy Phone &amp; Fax <Opt />
+                  </label>
                   <input
                     className="cc-input"
                     id="cc-pharmacy-phone-fax"
@@ -2041,7 +2083,9 @@ function Step2Panel({
                   />
                 </div>
                 <div className="cc-field cc-step1-field-full">
-                  <label htmlFor="cc-pharmacy-info">Pharmacy Information</label>
+                  <label htmlFor="cc-pharmacy-info">
+                    Pharmacy Information <Opt />
+                  </label>
                   <textarea
                     className="cc-textarea"
                     id="cc-pharmacy-info"
@@ -2051,9 +2095,19 @@ function Step2Panel({
                     value={pharmacyInformation}
                     onChange={(e) => onPharmacyInformationChange(e.target.value)}
                   />
+                  {dictation("pharmacyInformation")}
+                </div>
+                <div className="cc-step1-field-full">
+                  <HpiExtractPanel
+                    currentValues={hpiCurrentValues}
+                    onApply={onHpiApply}
+                    onFileChange={onHpiFileChange}
+                  />
                 </div>
                 <div className="cc-field cc-step1-field-full">
-                  <label htmlFor="cc-allergies">Allergies</label>
+                  <label htmlFor="cc-allergies">
+                    Allergies <Opt />
+                  </label>
                   <textarea
                     className="cc-textarea"
                     id="cc-allergies"
@@ -2063,9 +2117,12 @@ function Step2Panel({
                     value={allergies}
                     onChange={(e) => onAllergiesChange(e.target.value)}
                   />
+                  {dictation("allergies")}
                 </div>
                 <div className="cc-field cc-step1-field-full">
-                  <label htmlFor="cc-past-surgical">Past Surgical History</label>
+                  <label htmlFor="cc-past-surgical">
+                    Past Surgical History <Opt />
+                  </label>
                   <textarea
                     className="cc-textarea"
                     id="cc-past-surgical"
@@ -2075,9 +2132,12 @@ function Step2Panel({
                     value={pastSurgicalHistory}
                     onChange={(e) => onPastSurgicalHistoryChange(e.target.value)}
                   />
+                  {dictation("pastSurgicalHistory")}
                 </div>
                 <div className="cc-field cc-step1-field-full">
-                  <label htmlFor="cc-social-history">Social History</label>
+                  <label htmlFor="cc-social-history">
+                    Social History <Opt />
+                  </label>
                   <textarea
                     className="cc-textarea"
                     id="cc-social-history"
@@ -2087,6 +2147,7 @@ function Step2Panel({
                     value={socialHistory}
                     onChange={(e) => onSocialHistoryChange(e.target.value)}
                   />
+                  {dictation("socialHistory")}
                 </div>
               </div>
             </div>

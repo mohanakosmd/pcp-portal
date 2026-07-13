@@ -7,6 +7,7 @@ import { useEffect, useRef, useState } from "react";
 import { ageFromDob } from "@/lib/age";
 import type { CaseListItem, CaseListPillVariant } from "@/lib/cases";
 
+import { HPI_FIELDS, HpiExtractPanel, type HpiField } from "./HpiExtractPanel";
 import { LocalTime } from "./LocalTime";
 import { MedicationPicker } from "./MedicationPicker";
 import { useSpeechToText } from "./useSpeechToText";
@@ -17,6 +18,31 @@ const STORAGE_KEY = "pcp-cases-saved-collapsed";
 
 const pillClass = (variant: CaseListPillVariant) =>
   `cases-pill cases-pill--${variant}`;
+
+// Free-text Health fields that support Speak-to-Text in the report edit modal.
+// Numeric/phone fields are excluded — dictation garbles digit strings.
+type ModalDictationField =
+  | "inboxMessage"
+  | "allergies"
+  | "pastSurgicalHistory"
+  | "socialHistory"
+  | "pharmacyInformation";
+
+function MicIcon() {
+  return (
+    <svg width="22" height="22" viewBox="0 0 24 24" fill="none" aria-hidden="true">
+      <rect x="9" y="4" width="6" height="10" rx="3" stroke="currentColor" strokeWidth="1.9" />
+      <path
+        d="M6.5 11.5V12a5.5 5.5 0 0011 0v-.5"
+        stroke="currentColor"
+        strokeWidth="1.9"
+        strokeLinecap="round"
+      />
+      <path d="M12 17.5V21" stroke="currentColor" strokeWidth="1.9" strokeLinecap="round" />
+      <path d="M9 21h6" stroke="currentColor" strokeWidth="1.9" strokeLinecap="round" />
+    </svg>
+  );
+}
 
 type InsuranceImagePreview = {
   src: string;
@@ -954,6 +980,9 @@ function ReportModal({
     front: File | null;
     back: File | null;
   }>({ front: null, back: null });
+  // HPI History document staged by HpiExtractPanel — extracted values are already
+  // in healthForm; the file itself is uploaded to the case on Save.
+  const [stagedHpiFile, setStagedHpiFile] = useState<File | null>(null);
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState("");
   const [busyDoc, setBusyDoc] = useState(false);
@@ -969,6 +998,8 @@ function ReportModal({
     setEditing(false);
     setError("");
     setInsuranceFiles({ front: null, back: null });
+    setStagedHpiFile(null);
+    setDictationField(null);
   }, [open, record.id]);
 
   const setField = (key: keyof CaseListItem["editable"], value: string) =>
@@ -983,7 +1014,13 @@ function ReportModal({
   const renderHealthField = (
     label: string,
     key: keyof CaseListItem["health"],
-    opts: { multiline?: boolean; fallback: string; placeholder?: string }
+    opts: {
+      multiline?: boolean;
+      fallback: string;
+      placeholder?: string;
+      /** When set, shows a Speak-to-Text mic that dictates into this field. */
+      dictate?: ModalDictationField;
+    }
   ) => {
     const display = String(record.health[key] ?? "").trim();
     return (
@@ -991,12 +1028,15 @@ function ReportModal({
         <h5>{label}</h5>
         {editing ? (
           opts.multiline ? (
-            <textarea
-              style={{ ...editInputStyle, minHeight: 64, resize: "vertical" }}
-              value={String(healthForm[key] ?? "")}
-              placeholder={opts.placeholder}
-              onChange={(e) => setHealthField(key, e.target.value)}
-            />
+            <>
+              <textarea
+                style={{ ...editInputStyle, minHeight: 64, resize: "vertical" }}
+                value={String(healthForm[key] ?? "")}
+                placeholder={opts.placeholder}
+                onChange={(e) => setHealthField(key, e.target.value)}
+              />
+              {opts.dictate ? renderMic(opts.dictate) : null}
+            </>
           ) : (
             <input
               style={editInputStyle}
@@ -1012,21 +1052,73 @@ function ReportModal({
     );
   };
 
-  // Speak-to-Text for the inbox message — same behavior as the create-case form.
-  const speech = useSpeechToText((finalized) =>
-    setHealthForm((h) => ({
-      ...h,
-      inboxMessage: h.inboxMessage
-        ? `${h.inboxMessage.replace(/\s+$/, "")} ${finalized}`
-        : finalized,
-    }))
-  );
+  // Speak-to-Text across every free-text Health field. One recognizer, routed to
+  // whichever field's mic is active (dictationFieldRef), matching create-case.
+  // Digit/number fields (BMI, phone/fax) are excluded — dictation garbles them.
+  const [dictationField, setDictationField] = useState<ModalDictationField | null>(null);
+  const dictationFieldRef = useRef<ModalDictationField | null>(null);
+  const speech = useSpeechToText((finalized) => {
+    const target = dictationFieldRef.current;
+    if (!target) return;
+    setHealthForm((h) => {
+      const prev = String(h[target] ?? "");
+      return {
+        ...h,
+        [target]: prev ? `${prev.replace(/\s+$/, "")} ${finalized}` : finalized,
+      };
+    });
+  });
+
+  const toggleDictation = (field: ModalDictationField) => {
+    // Mics on other fields are disabled while one is live, so a toggle can only
+    // be the active field's own mic — stop it. Otherwise bind and start.
+    if (speech.listening) {
+      void speech.toggle();
+      return;
+    }
+    dictationFieldRef.current = field;
+    setDictationField(field);
+    void speech.toggle();
+  };
+
+  const stopDictation = () => {
+    if (speech.listening) void speech.toggle();
+    setDictationField(null);
+  };
+
+  // Mic button + its status line, bound to one field.
+  const renderMic = (field: ModalDictationField) => {
+    const active = speech.listening && dictationField === field;
+    return (
+      <>
+        <div className="cc-speech-action-row" style={{ marginTop: 8 }}>
+          <button
+            type="button"
+            className={`cc-speech-btn${active ? " cc-speech-btn--listening" : ""}`}
+            aria-label={active ? "Stop speech to text" : "Start speech to text"}
+            aria-pressed={active}
+            title={active ? "Stop recording" : "Speak-to-Text"}
+            onClick={() => toggleDictation(field)}
+            disabled={!speech.supported || (speech.listening && !active)}
+          >
+            <MicIcon />
+          </button>
+        </div>
+        {dictationField === field ? (
+          <p className="cc-field-hint" aria-live="polite" style={{ marginTop: 4 }}>
+            {speech.status}
+          </p>
+        ) : null}
+      </>
+    );
+  };
 
   const startEdit = () => {
     if (!canEdit) return;
     setForm(record.editable);
     setHealthForm(record.health);
     setInsuranceFiles({ front: null, back: null });
+    setStagedHpiFile(null);
     setError("");
     setEditing(true);
   };
@@ -1034,7 +1126,31 @@ function ReportModal({
   const cancelEdit = () => {
     setError("");
     setInsuranceFiles({ front: null, back: null });
+    setStagedHpiFile(null);
+    stopDictation();
     setEditing(false);
+  };
+
+  // HpiExtractPanel integration: the current Health value for each extractable
+  // field (for conflict detection), and applying the chosen extracted values
+  // into healthForm.
+  const hpiCurrentValues = HPI_FIELDS.reduce(
+    (acc, key) => {
+      acc[key] = String(healthForm[key] ?? "");
+      return acc;
+    },
+    {} as Record<HpiField, string>
+  );
+
+  const applyHpi = (values: Partial<Record<HpiField, string>>) => {
+    setHealthForm((h) => {
+      const next = { ...h };
+      for (const key of HPI_FIELDS) {
+        const v = values[key];
+        if (v !== undefined) next[key] = v;
+      }
+      return next;
+    });
   };
 
   const validate = (): string => {
@@ -1142,7 +1258,36 @@ function ReportModal({
       if (insuranceFiles.front) await uploadCard("front", insuranceFiles.front, insuranceFront);
       if (insuranceFiles.back) await uploadCard("back", insuranceFiles.back, insuranceBack);
 
+      // Attach the HPI History document, if one was staged. Its extracted values
+      // were already applied into healthForm and saved by the PATCH above.
+      if (stagedHpiFile) {
+        const fd = new FormData();
+        fd.append("file", stagedHpiFile);
+        fd.append("kind", "hpi_history");
+        const dres = await fetch(`/api/cases/${record.id}/documents`, {
+          method: "POST",
+          body: fd,
+        });
+        if (!dres.ok) {
+          const ddata = (await dres.json().catch(() => ({}))) as { error?: string };
+          throw new Error(ddata.error || "Could not attach the HPI history document.");
+        }
+      }
+
+      // The edits change the intake the AI summary + suggestions are derived
+      // from, so regenerate both. Runs after the About/Health/document writes
+      // above so it reads the updated case. Best-effort and awaited: a failure
+      // must not undo the saved edits, but on success the refresh below shows
+      // the new summary/suggestions immediately.
+      try {
+        await fetch(`/api/cases/${record.id}/ai-summary`, { method: "POST" });
+      } catch {
+        // ignore — the report's Regenerate action can retry later
+      }
+
       setInsuranceFiles({ front: null, back: null });
+      setStagedHpiFile(null);
+      stopDictation();
       setEditing(false);
       onSaved(); // re-fetch server data + report docs so the edits show
     } catch (e) {
@@ -1443,7 +1588,7 @@ function ReportModal({
             </div>
 
             <div>
-              <h5>Summary to inbox</h5>
+              <h5>Reason for Consultation</h5>
               {editing ? (
                 <>
                   <textarea
@@ -1451,27 +1596,7 @@ function ReportModal({
                     value={healthForm.inboxMessage}
                     onChange={(e) => setHealthField("inboxMessage", e.target.value)}
                   />
-                  <div className="cc-speech-action-row" style={{ marginTop: 8 }}>
-                    <button
-                      type="button"
-                      className={`cc-speech-btn${speech.listening ? " cc-speech-btn--listening" : ""}`}
-                      aria-label={speech.listening ? "Stop speech to text" : "Start speech to text"}
-                      aria-pressed={speech.listening}
-                      title={speech.listening ? "Stop recording" : "Speak-to-Text"}
-                      onClick={speech.toggle}
-                      disabled={!speech.supported}
-                    >
-                      <svg width="22" height="22" viewBox="0 0 24 24" fill="none" aria-hidden="true">
-                        <rect x="9" y="4" width="6" height="10" rx="3" stroke="currentColor" strokeWidth="1.9" />
-                        <path d="M6.5 11.5V12a5.5 5.5 0 0011 0v-.5" stroke="currentColor" strokeWidth="1.9" strokeLinecap="round" />
-                        <path d="M12 17.5V21" stroke="currentColor" strokeWidth="1.9" strokeLinecap="round" />
-                        <path d="M9 21h6" stroke="currentColor" strokeWidth="1.9" strokeLinecap="round" />
-                      </svg>
-                    </button>
-                  </div>
-                  <p className="cc-field-hint" aria-live="polite" style={{ marginTop: 4 }}>
-                    {speech.status}
-                  </p>
+                  {renderMic("inboxMessage")}
                 </>
               ) : (
                 <p>
@@ -1501,6 +1626,14 @@ function ReportModal({
               </p>
             </div>
 
+            {editing ? (
+              <HpiExtractPanel
+                currentValues={hpiCurrentValues}
+                onApply={applyHpi}
+                onFileChange={setStagedHpiFile}
+              />
+            ) : null}
+
             {renderHealthField("BMI", "bmi", {
               fallback: "No BMI recorded.",
               placeholder: "e.g. 24.5",
@@ -1508,14 +1641,17 @@ function ReportModal({
             {renderHealthField("Allergies", "allergies", {
               multiline: true,
               fallback: "No allergies reported.",
+              dictate: "allergies",
             })}
             {renderHealthField("Past surgical history", "pastSurgicalHistory", {
               multiline: true,
               fallback: "No past surgical history reported.",
+              dictate: "pastSurgicalHistory",
             })}
             {renderHealthField("Social history", "socialHistory", {
               multiline: true,
               fallback: "No social history reported.",
+              dictate: "socialHistory",
             })}
             {renderHealthField("Primary Care Physician (PCP)", "primaryCarePhysician", {
               fallback: "No primary care physician provided.",
@@ -1526,6 +1662,7 @@ function ReportModal({
             {renderHealthField("Pharmacy information", "pharmacyInformation", {
               multiline: true,
               fallback: "No pharmacy information provided.",
+              dictate: "pharmacyInformation",
             })}
             {renderHealthField("Pharmacy phone & fax", "pharmacyPhoneFax", {
               fallback: "No pharmacy phone/fax provided.",

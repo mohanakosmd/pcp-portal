@@ -1,20 +1,38 @@
 import { NextResponse } from "next/server";
 
+import {
+  RECOMMENDED_PROCEDURE_CATALOG,
+  RECOMMENDED_TEST_CATALOG,
+  assessmentPlanCatalogPromptText,
+  isKnownAssessmentPlanFileId,
+  resolveProcedureId,
+  resolveTestId,
+  slugCatalogPromptText,
+} from "@/lib/assessment-plan-catalog";
 import { readSessionUserId } from "@/lib/auth";
 import {
   PCP_CASES_COLLECTION,
   ageFromDob,
   readCaseOwnedBy,
   type CaseAboutDoc,
+  type CaseAiSuggestionMedication,
+  type CaseAiSuggestions,
   type CaseHealthDoc,
 } from "@/lib/cases";
 import { getDocument, listDocuments, nowIso, upsertDocument } from "@/lib/firestore-rest";
-import { generateText } from "@/lib/gemini";
+import { generateJson, generateText } from "@/lib/gemini";
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
 
 const MAX_SUMMARY_CHARS = 4000;
+
+// Caps for the structured suggestion set.
+const MAX_DIAGNOSIS_CHARS = 1200;
+const MAX_TREATMENT_NOTES_CHARS = 1200;
+const MAX_MEDICATIONS = 12;
+const MAX_MED_FIELD_CHARS = 200;
+const MAX_PLAN_FILES = 16;
 
 const SYSTEM_INSTRUCTION = `You are a clinical-summary assistant for a PCP (primary-care physician) intake portal. Your audience is a clinician reviewing the patient's intake. Write a concise, factual, clinically useful summary based ONLY on the structured data the user supplies — never invent diagnoses, lab values, or details not present in the input.
 
@@ -28,11 +46,14 @@ Caveat: one short line reminding the reader this is an AI-assisted preliminary s
 
 Keep the whole thing under ~350 words. Plain text only, no markdown headings, no code fences.`;
 
-function buildPrompt(opts: {
+type Intake = {
   about: Partial<CaseAboutDoc>;
   health: Partial<CaseHealthDoc>;
   documents: Array<{ fileName: string; kind: string }>;
-}): string {
+};
+
+/** The shared patient-intake block used by both the summary and suggestions prompts. */
+function buildIntakeBlock(opts: Intake): string {
   const { about, health, documents } = opts;
 
   const field = (label: string, value: unknown) => {
@@ -57,9 +78,12 @@ function buildPrompt(opts: {
     field("Allergies", health.allergies),
     field("Current medications", health.currentMedications),
     field("Existing conditions", health.existingConditions),
+    field("Past surgical history", health.pastSurgicalHistory),
+    field("Social history", health.socialHistory),
     field("Recent tests or procedures", health.recentTestsOrProcedures),
     field("Family history", health.familyHistory),
     field("Lifestyle notes", health.lifestyleNotes),
+    field("BMI", health.bmi),
     field("Patient-indicated urgency", health.urgencyLevel),
   ].filter((v): v is string => Boolean(v));
 
@@ -69,8 +93,6 @@ function buildPrompt(opts: {
     : "No documents attached.";
 
   return [
-    "PATIENT INTAKE — please summarize.",
-    "",
     "About the patient:",
     aboutLines.length ? aboutLines.join("\n") : "(no demographic data captured)",
     "",
@@ -79,6 +101,183 @@ function buildPrompt(opts: {
     "",
     docLine,
   ].join("\n");
+}
+
+function buildPrompt(opts: Intake): string {
+  return `PATIENT INTAKE — please summarize.\n\n${buildIntakeBlock(opts)}`;
+}
+
+const SUGGESTIONS_SYSTEM_INSTRUCTION = `You are a GI (gastroenterology) triage assistant helping prepare a case for a specialist's review. From the PCP intake below, produce PROVISIONAL decision-support suggestions the specialist will confirm or override — never a prescription or a final diagnosis.
+
+Base everything ONLY on the supplied intake. Do not invent findings. Be conservative: when the intake is thin, suggest less rather than guessing — an empty array or "" is the correct answer when nothing clearly applies.
+
+Return, as JSON, matching the GI plan form:
+- diagnosis: a brief working clinical impression, at most 80 words. If the picture is too vague to impress, say so plainly.
+- files: from the "Assessment & Plan File catalog" in the prompt, the NUMERIC ids of the documents/orders that fit this case. CHOOSE ONLY ids listed there. Prefer a focused set.
+- treatmentNotes: a short free-text plan for the specialist (e.g. empiric therapy, follow-up interval, counseling), at most 60 words. "" if nothing to add.
+- tests: from the "Recommend Tests catalog" in the prompt, the string ids of applicable labs. CHOOSE ONLY ids listed there.
+- procedures: from the "Recommended Procedures catalog" in the prompt, the string ids of applicable procedures. CHOOSE ONLY ids listed there.
+- medications: suggested medications for the specialist to consider, each an object { name, dosage, frequency }. name = drug or class (e.g. "Esomeprazole"); dosage = strength + duration (e.g. "40 mg for 8 weeks"); frequency = how often (e.g. "Twice daily"). Empty array if nothing is clearly indicated.
+  Derive medications from BOTH the presenting concern/symptoms AND the patient's current medications:
+  * Target the presenting symptoms — each suggestion should plausibly address the chief complaint. Do not suggest a medication unrelated to why the patient is here.
+  * Reconcile against the current medications listed in the intake. Do NOT re-suggest a drug (or a same-class drug) the patient is already taking, unless you are explicitly recommending a change — in that case say so in the dosage/frequency text (e.g. "escalate to 40 mg" or "switch from ranitidine"). Avoid an obvious duplication or interaction with what they already take.
+  * If the patient is already on an adequate regimen for the presenting complaint, prefer an empty array over restating it.
+  * Keep it focused: at most 4 medications. dosage and frequency are each ONE short phrase (≤ 12 words) — a single recommendation, not a list of alternatives.`;
+
+const SUGGESTIONS_RESPONSE_SCHEMA: Record<string, unknown> = {
+  type: "OBJECT",
+  properties: {
+    diagnosis: { type: "STRING" },
+    files: { type: "ARRAY", items: { type: "INTEGER" } },
+    treatmentNotes: { type: "STRING" },
+    tests: { type: "ARRAY", items: { type: "STRING" } },
+    procedures: { type: "ARRAY", items: { type: "STRING" } },
+    medications: {
+      type: "ARRAY",
+      items: {
+        type: "OBJECT",
+        properties: {
+          name: { type: "STRING" },
+          dosage: { type: "STRING" },
+          frequency: { type: "STRING" },
+        },
+        required: ["name", "dosage", "frequency"],
+      },
+    },
+  },
+  required: ["diagnosis", "files", "treatmentNotes", "tests", "procedures", "medications"],
+};
+
+function buildSuggestionsPrompt(opts: Intake): string {
+  return [
+    "PATIENT INTAKE — prepare provisional GI decision-support suggestions.",
+    "",
+    buildIntakeBlock(opts),
+    "",
+    "Assessment & Plan File catalog (choose files ONLY from these numeric ids):",
+    assessmentPlanCatalogPromptText(),
+    "",
+    "Recommend Tests catalog (choose tests ONLY from these ids):",
+    slugCatalogPromptText(RECOMMENDED_TEST_CATALOG),
+    "",
+    "Recommended Procedures catalog (choose procedures ONLY from these ids):",
+    slugCatalogPromptText(RECOMMENDED_PROCEDURE_CATALOG),
+  ].join("\n");
+}
+
+type RawSuggestions = {
+  diagnosis?: unknown;
+  files?: unknown;
+  treatmentNotes?: unknown;
+  tests?: unknown;
+  procedures?: unknown;
+  medications?: unknown;
+};
+
+/** Keeps only real, deduped catalog file ids, capped — no hallucinated id reaches the form. */
+function normalizeFileIds(raw: unknown): number[] {
+  const seen = new Set<number>();
+  const out: number[] = [];
+  if (!Array.isArray(raw)) return out;
+  for (const v of raw) {
+    const n = typeof v === "number" ? v : typeof v === "string" ? Number(v) : NaN;
+    if (!Number.isInteger(n) || seen.has(n) || !isKnownAssessmentPlanFileId(n)) continue;
+    seen.add(n);
+    out.push(n);
+    if (out.length >= MAX_PLAN_FILES) break;
+  }
+  return out;
+}
+
+/** Resolves each entry to a known slug id (via id or label), deduped. Drops unknowns. */
+function normalizeSlugs(raw: unknown, resolve: (v: string) => string | null): string[] {
+  const seen = new Set<string>();
+  const out: string[] = [];
+  if (!Array.isArray(raw)) return out;
+  for (const v of raw) {
+    if (typeof v !== "string") continue;
+    const id = resolve(v);
+    if (!id || seen.has(id)) continue;
+    seen.add(id);
+    out.push(id);
+  }
+  return out;
+}
+
+function normalizeMedications(raw: unknown): CaseAiSuggestionMedication[] {
+  if (!Array.isArray(raw)) return [];
+  const out: CaseAiSuggestionMedication[] = [];
+  for (const m of raw) {
+    if (!m || typeof m !== "object") continue;
+    const med = m as Record<string, unknown>;
+    const name = typeof med.name === "string" ? med.name.trim().slice(0, MAX_MED_FIELD_CHARS) : "";
+    if (!name) continue; // a row with no drug name is meaningless
+    out.push({
+      name,
+      dosage:
+        typeof med.dosage === "string" ? med.dosage.trim().slice(0, MAX_MED_FIELD_CHARS) : "",
+      frequency:
+        typeof med.frequency === "string"
+          ? med.frequency.trim().slice(0, MAX_MED_FIELD_CHARS)
+          : "",
+    });
+    if (out.length >= MAX_MEDICATIONS) break;
+  }
+  return out;
+}
+
+/**
+ * Validates and normalizes the model's raw suggestion JSON into the stored shape
+ * (1:1 with the GI plan form). Every list is filtered to real catalog entries so
+ * a hallucinated id/label can't reach the form.
+ */
+function normalizeSuggestions(raw: RawSuggestions): CaseAiSuggestions {
+  return {
+    diagnosis:
+      typeof raw.diagnosis === "string" ? raw.diagnosis.trim().slice(0, MAX_DIAGNOSIS_CHARS) : "",
+    files: normalizeFileIds(raw.files),
+    treatmentNotes:
+      typeof raw.treatmentNotes === "string"
+        ? raw.treatmentNotes.trim().slice(0, MAX_TREATMENT_NOTES_CHARS)
+        : "",
+    tests: normalizeSlugs(raw.tests, resolveTestId),
+    procedures: normalizeSlugs(raw.procedures, resolveProcedureId),
+    medications: normalizeMedications(raw.medications),
+    generatedAt: nowIso(),
+  };
+}
+
+/**
+ * Generates the structured suggestion set. Isolated from the prose-summary path:
+ * a failure here (or an all-empty result) returns null so the caller still saves
+ * the summary. Never throws.
+ */
+async function generateSuggestions(intake: Intake): Promise<CaseAiSuggestions | null> {
+  try {
+    const raw = await generateJson<RawSuggestions>(buildSuggestionsPrompt(intake), {
+      systemInstruction: SUGGESTIONS_SYSTEM_INSTRUCTION,
+      responseSchema: SUGGESTIONS_RESPONSE_SCHEMA,
+      temperature: 0.2,
+      // A truncated response is unparseable JSON, so generateJson throws and the
+      // whole set is lost. This shape (diagnosis + notes + several medication
+      // objects) can run long, so give it generous headroom; the prompt also
+      // caps medication count/verbosity to keep it well under this.
+      maxOutputTokens: 4096,
+      timeoutMs: 60_000,
+    });
+    const s = normalizeSuggestions(raw);
+    const empty =
+      !s.diagnosis &&
+      !s.treatmentNotes &&
+      !s.files.length &&
+      !s.tests.length &&
+      !s.procedures.length &&
+      !s.medications.length;
+    return empty ? null : s;
+  } catch (err) {
+    console.error("[ai-summary] suggestions generation failed:", err);
+    return null;
+  }
 }
 
 export async function POST(
@@ -107,25 +306,41 @@ export async function POST(
         kind: typeof d.data.kind === "string" ? d.data.kind : "other",
       }));
 
-    const prompt = buildPrompt({ about, health, documents });
-    const summary = await generateText(prompt, {
-      systemInstruction: SYSTEM_INSTRUCTION,
-      temperature: 0.35,
-      maxOutputTokens: 1024,
-    });
+    const intake = { about, health, documents };
+
+    // Summary and structured suggestions are independent Gemini calls; run them
+    // together. The summary drives this route's success/failure (unchanged);
+    // generateSuggestions never throws, so a suggestion failure can't fail the
+    // summary. Its result is null on failure or an all-empty parse.
+    const [summary, suggestions] = await Promise.all([
+      generateText(buildPrompt(intake), {
+        systemInstruction: SYSTEM_INSTRUCTION,
+        temperature: 0.35,
+        maxOutputTokens: 1024,
+      }),
+      generateSuggestions(intake),
+    ]);
 
     const truncated = summary.slice(0, MAX_SUMMARY_CHARS);
     const now = nowIso();
-    await upsertDocument(PCP_CASES_COLLECTION, caseId, {
+    // Only write aiSuggestions when we actually have a set — a transient
+    // suggestion failure must not wipe a previously generated one on regenerate.
+    const update: Record<string, unknown> = {
       aiSummary: truncated,
       aiSummaryGeneratedAt: now,
       updatedAt: now,
-    });
+    };
+    if (suggestions) {
+      update.aiSuggestions = suggestions;
+      update.aiSuggestionsGeneratedAt = suggestions.generatedAt;
+    }
+    await upsertDocument(PCP_CASES_COLLECTION, caseId, update);
 
     return NextResponse.json({
       ok: true,
       aiSummary: truncated,
       aiSummaryGeneratedAt: now,
+      aiSuggestions: suggestions,
     });
   } catch (err) {
     // eslint-disable-next-line @typescript-eslint/no-explicit-any

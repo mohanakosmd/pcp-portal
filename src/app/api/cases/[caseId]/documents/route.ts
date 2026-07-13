@@ -24,6 +24,7 @@ const VALID_KINDS = new Set([
   "note",
   "insurance_card_front",
   "insurance_card_back",
+  "hpi_history",
   "other",
 ]);
 

@@ -94,6 +94,9 @@ async function main() {
       updatedAt: "ISO timestamp",
       aiSummary: "string|null ≤4000",
       aiSummaryGeneratedAt: "ISO timestamp|null",
+      aiSuggestions:
+        "map|null { diagnosis, files[], treatmentNotes, tests[], procedures[], medications[{name,dosage,frequency}], generatedAt } — submit-time GI decision support",
+      aiSuggestionsGeneratedAt: "ISO timestamp|null",
     },
     statusStateMachine:
       "[create] → draft → submitted → under_review → completed → closed",

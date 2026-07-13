@@ -40,6 +40,8 @@ export function NotificationBell() {
   const [items, setItems] = useState<Notification[]>([]);
   const [unreadCount, setUnreadCount] = useState(0);
   const [loading, setLoading] = useState(false);
+  // Read/unread filter for the list. "all" shows everything.
+  const [filter, setFilter] = useState<"all" | "unread" | "read">("all");
   const wrapperRef = useRef<HTMLDivElement | null>(null);
 
   const fetchList = useCallback(async () => {
@@ -107,6 +109,18 @@ export function NotificationBell() {
       }
     }
   };
+
+  // Client-side read/unread filtering of whatever's currently loaded.
+  const visibleItems =
+    filter === "all"
+      ? items
+      : items.filter((n) => (filter === "unread" ? !n.read : n.read));
+
+  const FILTERS = [
+    { key: "all", label: "All" },
+    { key: "unread", label: "Unread" },
+    { key: "read", label: "Read" },
+  ] as const;
 
   const handleMarkAllRead = async () => {
     setItems((prev) => prev.map((x) => ({ ...x, read: true })));

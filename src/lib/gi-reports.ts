@@ -10,8 +10,14 @@
 // The PCP's reports page lists every `gi_shared_reports` whose `case_id`
 // resolves to a `pcp_cases` doc that the current PCP owns.
 
+import {
+  groupAssessmentPlanFileIds,
+  type AssessmentPlanFileGroup,
+} from "@/lib/assessment-plan-catalog";
 import { PCP_CASES_COLLECTION } from "@/lib/cases";
 import { getDocument, listDocuments } from "@/lib/firestore-rest";
+
+export type { AssessmentPlanFileGroup };
 
 export const GI_MEDICAL_REPORTS_COLLECTION = "gi_medical_reports";
 export const GI_SHARED_REPORTS_COLLECTION = "gi_shared_reports";
@@ -120,63 +126,6 @@ export type CategorizedRecommendations = {
   other: string[];
 };
 
-export type AssessmentPlanFileGroup = { category: string; files: string[] };
-
-// The GI portal stores the "Assessment & Plan Files" a specialist picks only as
-// numeric ids on `gi_specialist_plan.selected_final_note_file_ids`. The id →
-// label + category catalog lives in the GI portal source (AIGI:
-// src/component/admin/viewpatient.js `fileCategories`); mirrored here so the PCP
-// report can show the selected documents grouped the same way. Keep in sync if
-// the GI portal's catalog changes.
-const ASSESSMENT_PLAN_FILE_CATALOG: {
-  category: string;
-  files: { id: number; label: string }[];
-}[] = [
-  {
-    category: "Labs",
-    files: [
-      { id: 5, label: "Basic Gastro Labs" },
-      { id: 3, label: "Anemia Labs" },
-      { id: 14, label: "Hepatic Labs" },
-      { id: 19, label: "Stool Studies" },
-    ],
-  },
-  {
-    category: "Imaging",
-    files: [
-      { id: 1, label: "Abdominal CT" },
-      { id: 2, label: "Abdominal US" },
-      { id: 4, label: "Barium Studies" },
-    ],
-  },
-  {
-    category: "Procedure",
-    files: [
-      { id: 10, label: "EGD Order" },
-      { id: 6, label: "Colon Order" },
-      { id: 7, label: "Colonoscopy" },
-      { id: 22, label: "Upper GI Endoscopy" },
-      { id: 18, label: "Procedural Sedation" },
-      { id: 8, label: "Colon Screening Guidelines" },
-      { id: 21, label: "Telehealth Disclaimer" },
-    ],
-  },
-  {
-    category: "Diet & Lifestyle Modification",
-    files: [
-      { id: 23, label: "Weight Reducing Diet" },
-      { id: 15, label: "High Fiber Diet" },
-      { id: 13, label: "GERD and Lifestyle" },
-      { id: 20, label: "Stress Management" },
-      { id: 12, label: "FODMAP Diet" },
-      { id: 11, label: "Fatty Liver" },
-      { id: 9, label: "Diverticulosis" },
-      { id: 17, label: "Irritable Bowel Syndrome" },
-      { id: 16, label: "Inflammatory Bowel Disease" },
-    ],
-  },
-];
-
 /** Reads a trimmed string field off the (map-shaped) gi_specialist_plan value. */
 function planString(plan: unknown, key: string): string {
   if (!plan || typeof plan !== "object" || Array.isArray(plan)) return "";
@@ -197,26 +146,9 @@ function extractSelectedFileIds(plan: unknown): number[] {
   return out;
 }
 
-/** Maps selected note-file ids to label groups, in catalog order. */
+/** Maps a (map-shaped) gi_specialist_plan's selected file ids to label groups. */
 export function groupAssessmentPlanFiles(plan: unknown): AssessmentPlanFileGroup[] {
-  const ids = extractSelectedFileIds(plan);
-  if (ids.length === 0) return [];
-  const idSet = new Set(ids);
-  const groups: AssessmentPlanFileGroup[] = [];
-  const known = new Set<number>();
-  for (const cat of ASSESSMENT_PLAN_FILE_CATALOG) {
-    const files: string[] = [];
-    for (const f of cat.files) {
-      known.add(f.id);
-      if (idSet.has(f.id)) files.push(f.label);
-    }
-    if (files.length) groups.push({ category: cat.category, files });
-  }
-  const unknown = ids.filter((id) => !known.has(id));
-  if (unknown.length) {
-    groups.push({ category: "Other", files: unknown.map((id) => `Document #${id}`) });
-  }
-  return groups;
+  return groupAssessmentPlanFileIds(extractSelectedFileIds(plan));
 }
 
 /**

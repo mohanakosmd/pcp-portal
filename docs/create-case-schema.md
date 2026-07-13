@@ -50,6 +50,22 @@ to fetch subcollections to render a case row.
 | `updatedAt` | ISO timestamp | yes | — | Bumped on any write to root or to any subcollection |
 | `aiSummary` | string \| null | no | ≤ 4000 chars | Future use: post-submit AI summary text |
 | `aiSummaryGeneratedAt` | ISO timestamp \| null | no | — | When the summary was generated |
+| `aiSuggestions` | map \| null | no | — | Structured, AI-generated GI decision support produced at submit (see below). Null until generated |
+| `aiSuggestionsGeneratedAt` | ISO timestamp \| null | no | — | When the suggestion set was generated |
+
+#### `aiSuggestions` map
+
+Generated alongside `aiSummary` by `POST /api/cases/{caseId}/ai-summary`, mapping 1:1 to the controls of the GI "Clinical Diagnosis & Plan" workspace so it can pre-populate that form. Every value is a suggestion for a clinician to confirm — never a prescription. All catalogs live in `src/lib/assessment-plan-catalog.ts`.
+
+| Field | GI control | Type | Notes |
+| --- | --- | --- | --- |
+| `diagnosis` | Edit Diagnosis textarea | string | Provisional working impression, ≤ 1200 chars |
+| `files` | Assessment & Plan Files checkboxes | number[] | Selected file catalog ids, validated + deduped, ≤ 16 |
+| `treatmentNotes` | Additional treatment notes textarea | string | ≤ 1200 chars |
+| `tests` | Recommend Tests checkboxes | string[] | Slug ids from the test catalog (`cbc`, `cmp`, `celiac`, `fecal_calprotectin`) |
+| `procedures` | Recommended Procedures checkboxes | string[] | Slug ids from the procedure catalog (`colonoscopy`, `egd`, `abdominal_ultrasound`) |
+| `medications` | Current Medications rows | `{ name, dosage, frequency }[]` | ≤ 12 rows, each field ≤ 200 chars; a row with no `name` is dropped |
+| `generatedAt` | — | ISO timestamp | Generation time |
 
 ### Status state machine
 

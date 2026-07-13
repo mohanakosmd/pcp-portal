@@ -803,6 +803,229 @@
   margin-top: 2px;
 }
 
+/* ---- HPI History document upload + extraction review -------------------- */
+
+/* Sits inside the "Medical history & care team" card, directly under Pharmacy
+   Information, so it's an inset panel rather than a card of its own. */
+.cc-hpi-section {
+  margin-top: 4px;
+  padding: 16px;
+  border: 1px solid #e2e8f0;
+  border-radius: 12px;
+  background: #f8fafc;
+}
+
+.cc-hpi-section__head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  margin-bottom: 4px;
+}
+
+.cc-hpi-section__title {
+  margin: 0;
+  font-size: 14px;
+  font-weight: 700;
+  color: var(--dash-text, #0f172a);
+}
+
+.cc-hpi-section__drop {
+  margin-top: 12px;
+}
+
+/* The drop tile reads as the interactive surface, so it stays white against
+   the section's tinted background. */
+.cc-hpi-section .cc-hpi-drop {
+  background: #fff;
+}
+
+.cc-hpi-section .cc-hpi-drop:hover,
+.cc-hpi-section .cc-hpi-drop:focus-within {
+  background: #f8fafc;
+}
+
+.cc-hpi-drop {
+  position: relative;
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  padding: 16px 18px;
+  border: 1.5px dashed #cbd5e1;
+  border-radius: 12px;
+  background: #f8fafc;
+  color: #475569;
+  cursor: pointer;
+  transition: border-color 0.15s ease, background 0.15s ease;
+}
+
+.cc-hpi-drop:hover,
+.cc-hpi-drop:focus-within {
+  border-color: var(--dash-navy, #1e3a8a);
+  background: #f1f5f9;
+}
+
+.cc-hpi-drop .cc-file-input {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  opacity: 0;
+  pointer-events: none;
+}
+
+.cc-hpi-drop__text {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+
+.cc-hpi-drop__text strong {
+  font-size: 14px;
+  font-weight: 600;
+  color: var(--dash-text, #0f172a);
+}
+
+.cc-hpi-drop__text span {
+  font-size: 12px;
+  color: #64748b;
+}
+
+.cc-hpi-status {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  margin-top: 12px;
+  font-size: 13px;
+  font-weight: 500;
+  color: #475569;
+}
+
+.cc-hpi-spinner {
+  width: 15px;
+  height: 15px;
+  border: 2px solid #cbd5e1;
+  border-top-color: var(--dash-navy, #1e3a8a);
+  border-radius: 50%;
+  animation: cc-hpi-spin 0.7s linear infinite;
+}
+
+@keyframes cc-hpi-spin {
+  to {
+    transform: rotate(360deg);
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .cc-hpi-spinner {
+    animation-duration: 2.4s;
+  }
+}
+
+.cc-hpi-panel {
+  margin-top: 14px;
+  padding: 16px;
+  border: 1px solid #e2e8f0;
+  border-radius: 12px;
+  background: #fff;
+}
+
+.cc-hpi-panel--error {
+  border-color: #fca5a5;
+  background: #fef2f2;
+}
+
+.cc-hpi-panel__head {
+  margin-bottom: 12px;
+}
+
+.cc-hpi-panel__title {
+  margin: 0 0 2px;
+  font-size: 14px;
+  font-weight: 700;
+  color: var(--dash-text, #0f172a);
+}
+
+.cc-hpi-list {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  margin: 0 0 14px;
+  padding: 0;
+  list-style: none;
+}
+
+.cc-hpi-item {
+  padding: 10px 12px;
+  border: 1px solid #e2e8f0;
+  border-radius: 10px;
+  background: #f8fafc;
+}
+
+.cc-hpi-item__label {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  cursor: pointer;
+}
+
+.cc-hpi-item__label input {
+  width: 16px;
+  height: 16px;
+  accent-color: var(--dash-navy, #1e3a8a);
+  cursor: pointer;
+}
+
+.cc-hpi-item__name {
+  font-size: 13px;
+  font-weight: 600;
+  color: #334155;
+}
+
+.cc-hpi-item__value {
+  margin: 6px 0 0 24px;
+  font-size: 13px;
+  line-height: 1.45;
+  color: var(--dash-text, #0f172a);
+  white-space: pre-wrap;
+}
+
+.cc-hpi-item__conflict {
+  margin: 6px 0 0 24px;
+  font-size: 12px;
+  font-weight: 500;
+  line-height: 1.4;
+  color: #b45309;
+}
+
+.cc-hpi-panel__actions {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 10px;
+}
+
+.cc-hpi-applied {
+  font-size: 12px;
+  font-weight: 600;
+  color: #15803d;
+}
+
+/* Red asterisk that precedes the name of every mandatory field. */
+.cc-req {
+  margin-right: 4px;
+  font-weight: 700;
+  color: #dc2626;
+}
+
+/* "(Optional)" suffix on fields the PCP can safely leave blank. */
+.cc-optional {
+  margin-left: 4px;
+  font-size: 0.92em;
+  font-weight: 500;
+  font-style: italic;
+  color: #64748b;
+}
+
 /* Tint a field whose inline error is showing. */
 .cc-field:has(.cc-field-error) .cc-input,
 .cc-field:has(.cc-field-error) .cc-select {
