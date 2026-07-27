@@ -17,10 +17,11 @@ export const HPI_FIELDS = [
   "pastSurgicalHistory",
   "socialHistory",
   "pharmacyInformation",
-  "pharmacyPhoneFax",
+  "pharmacyPhone",
+  "pharmacyFax",
   "primaryCarePhysician",
-  "pcpPhoneFax",
-  "bmi",
+  "pcpPhone",
+  "pcpFax",
 ] as const;
 
 export type HpiField = (typeof HPI_FIELDS)[number];
@@ -32,10 +33,11 @@ export const HPI_FIELD_LABELS: Record<HpiField, string> = {
   pastSurgicalHistory: "Past Surgical History",
   socialHistory: "Social History",
   pharmacyInformation: "Pharmacy Information",
-  pharmacyPhoneFax: "Pharmacy Phone & Fax",
+  pharmacyPhone: "Pharmacy Phone",
+  pharmacyFax: "Pharmacy Fax",
   primaryCarePhysician: "Primary Care Physician (PCP)",
-  pcpPhoneFax: "PCP Phone & Fax",
-  bmi: "BMI",
+  pcpPhone: "PCP Phone",
+  pcpFax: "PCP Fax",
 };
 
 /** What the HPI upload accepts — must stay in sync with /api/hpi-extract. */

@@ -25,7 +25,18 @@ type SignupBody = {
   email?: unknown;
   mobile?: unknown;
   password?: unknown;
+  // Optional NPI-registry provider details selected in step 1 of sign-up.
+  npiNumber?: unknown;
+  npiCredential?: unknown;
+  specialty?: unknown;
+  practiceCity?: unknown;
+  practiceState?: unknown;
+  practicePostalCode?: unknown;
 };
+
+function asOptStr(v: unknown, max: number): string {
+  return typeof v === "string" ? v.trim().slice(0, max) : "";
+}
 
 const WEAK_PASSWORD_MESSAGE =
   "Password must be at least 8 characters and include uppercase, lowercase, number, and special character.";
@@ -95,6 +106,13 @@ export async function POST(request: Request) {
       otpCode: code,
       otpExpiresAt: expiresAt.toISOString(),
       otpAttempts: 0,
+      // NPI-registry details (blank when the provider skipped registry lookup).
+      npiNumber: asOptStr(body.npiNumber, 10),
+      npiCredential: asOptStr(body.npiCredential, 40),
+      specialty: asOptStr(body.specialty, 120),
+      practiceCity: asOptStr(body.practiceCity, 80),
+      practiceState: asOptStr(body.practiceState, 40),
+      practicePostalCode: asOptStr(body.practicePostalCode, 20),
       createdAt: now,
       updatedAt: now,
     });

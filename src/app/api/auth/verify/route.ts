@@ -84,6 +84,14 @@ export async function POST(request: Request) {
     const fullName = typeof data.fullName === "string" ? data.fullName : "";
     const phone = typeof data.phone === "string" ? data.phone : "";
     const passwordHash = typeof data.passwordHash === "string" ? data.passwordHash : "";
+    // NPI-registry details captured at sign-up (blank if none was selected).
+    const asStagedStr = (v: unknown): string => (typeof v === "string" ? v : "");
+    const npiNumber = asStagedStr(data.npiNumber);
+    const npiCredential = asStagedStr(data.npiCredential);
+    const specialty = asStagedStr(data.specialty);
+    const practiceCity = asStagedStr(data.practiceCity);
+    const practiceState = asStagedStr(data.practiceState);
+    const practicePostalCode = asStagedStr(data.practicePostalCode);
     const userKey = emailKey(email);
     const now = nowIso();
 
@@ -120,6 +128,13 @@ export async function POST(request: Request) {
       otpCode: null,
       otpExpiresAt: null,
       otpAttempts: 0,
+      // Provider details from the NPI registry, surfaced on the profile page.
+      npiNumber,
+      npiCredential,
+      specialty,
+      practiceCity,
+      practiceState,
+      practicePostalCode,
       createdAt: now,
       updatedAt: now,
     });

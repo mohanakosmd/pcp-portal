@@ -62,8 +62,12 @@ async function loadInitialCase(caseId: string): Promise<InitialCase | null> {
     pastSurgicalHistory?: string | null;
     socialHistory?: string | null;
     primaryCarePhysician?: string | null;
+    pcpPhone?: string | null;
+    pcpFax?: string | null;
     pcpPhoneFax?: string | null;
     pharmacyInformation?: string | null;
+    pharmacyPhone?: string | null;
+    pharmacyFax?: string | null;
     pharmacyPhoneFax?: string | null;
   };
 
@@ -112,9 +116,13 @@ async function loadInitialCase(caseId: string): Promise<InitialCase | null> {
       pastSurgicalHistory: health.pastSurgicalHistory ?? "",
       socialHistory: health.socialHistory ?? "",
       primaryCarePhysician: health.primaryCarePhysician ?? "",
-      pcpPhoneFax: health.pcpPhoneFax ?? "",
+      // Legacy fallback: pre-split drafts stored a combined pcpPhoneFax — show it
+      // under Phone so the value isn't lost when the draft is resumed.
+      pcpPhone: health.pcpPhone ?? health.pcpPhoneFax ?? "",
+      pcpFax: health.pcpFax ?? "",
       pharmacyInformation: health.pharmacyInformation ?? "",
-      pharmacyPhoneFax: health.pharmacyPhoneFax ?? "",
+      pharmacyPhone: health.pharmacyPhone ?? health.pharmacyPhoneFax ?? "",
+      pharmacyFax: health.pharmacyFax ?? "",
     },
     // Step 3 list = everything that ISN'T an insurance card.
     documents: docs.filter(

@@ -21,6 +21,11 @@ export type { AssessmentPlanFileGroup };
 
 export const GI_MEDICAL_REPORTS_COLLECTION = "gi_medical_reports";
 export const GI_SHARED_REPORTS_COLLECTION = "gi_shared_reports";
+// GI specialists live in `gi_users`; older/admin-created ones in `admin_users`.
+// Both may carry a `signatureUrl` (a base64 data: URI of the e-signature image),
+// keyed by the same id the report stores as `gi_specialist_id`.
+const GI_USERS_COLLECTION = "gi_users";
+const ADMIN_USERS_COLLECTION = "admin_users";
 
 export type GiMedicalFile = {
   id: string;
@@ -72,12 +77,17 @@ export type GiSharedReport = {
   familyHistory: string | null;
   lifestyleNotes: string | null;
   primaryCarePhysician: string | null;
-  pcpPhoneFax: string | null;
+  pcpPhone: string | null;
+  pcpFax: string | null;
   pharmacyInformation: string | null;
-  pharmacyPhoneFax: string | null;
+  pharmacyPhone: string | null;
+  pharmacyFax: string | null;
   // GI specialist.
   giSpecialistId: string;
   giSpecialistName: string;
+  // The GI specialist's e-signature image as a base64 data: URI (from their
+  // gi_users/admin_users `signatureUrl`), or null when they have none on file.
+  giSpecialistSignatureUrl: string | null;
   // Clinical content.
   clinicalSummary: string;
   aiInsight: string;
@@ -223,9 +233,11 @@ type CaseIntake = {
   familyHistory: string | null;
   lifestyleNotes: string | null;
   primaryCarePhysician: string | null;
-  pcpPhoneFax: string | null;
+  pcpPhone: string | null;
+  pcpFax: string | null;
   pharmacyInformation: string | null;
-  pharmacyPhoneFax: string | null;
+  pharmacyPhone: string | null;
+  pharmacyFax: string | null;
 };
 
 const EMPTY_INTAKE: CaseIntake = {
@@ -251,17 +263,41 @@ const EMPTY_INTAKE: CaseIntake = {
   familyHistory: null,
   lifestyleNotes: null,
   primaryCarePhysician: null,
-  pcpPhoneFax: null,
+  pcpPhone: null,
+  pcpFax: null,
   pharmacyInformation: null,
-  pharmacyPhoneFax: null,
+  pharmacyPhone: null,
+  pharmacyFax: null,
 };
+
+/**
+ * Resolves a GI specialist's e-signature image (a base64 data: URI) by id,
+ * checking `gi_users` first, then `admin_users`. Returns null when the id is
+ * empty, the user is missing, or they have no signature on file. Best-effort:
+ * a lookup error yields null rather than throwing.
+ */
+async function fetchGiSignatureUrl(giSpecialistId: string): Promise<string | null> {
+  if (!giSpecialistId) return null;
+  for (const coll of [GI_USERS_COLLECTION, ADMIN_USERS_COLLECTION]) {
+    try {
+      const doc = await getDocument(coll, giSpecialistId);
+      const url =
+        doc && typeof doc.data.signatureUrl === "string" ? doc.data.signatureUrl.trim() : "";
+      if (url) return url;
+    } catch {
+      // ignore and try the next collection
+    }
+  }
+  return null;
+}
 
 function parseSharedReport(
   id: string,
   data: Record<string, unknown>,
   caseInfo: CaseIntake & { shortCode: string },
   medicalFiles: GiMedicalFile[],
-  remarkCount: number
+  remarkCount: number,
+  giSpecialistSignatureUrl: string | null
 ): GiSharedReport {
   // Prefer the PCP case's own About data so the report matches what the
   // Cases page shows; fall back to the GI portal's snapshot fields.
@@ -307,11 +343,14 @@ function parseSharedReport(
     familyHistory: caseInfo.familyHistory,
     lifestyleNotes: caseInfo.lifestyleNotes,
     primaryCarePhysician: caseInfo.primaryCarePhysician,
-    pcpPhoneFax: caseInfo.pcpPhoneFax,
+    pcpPhone: caseInfo.pcpPhone,
+    pcpFax: caseInfo.pcpFax,
     pharmacyInformation: caseInfo.pharmacyInformation,
-    pharmacyPhoneFax: caseInfo.pharmacyPhoneFax,
+    pharmacyPhone: caseInfo.pharmacyPhone,
+    pharmacyFax: caseInfo.pharmacyFax,
     giSpecialistId: strOrEmpty(data.gi_specialist_id),
     giSpecialistName: strOrEmpty(data.gi_specialist_name) || "GI Specialist",
+    giSpecialistSignatureUrl,
     clinicalSummary: strOrEmpty(data.clinical_summary),
     aiInsight: strOrEmpty(data.ai_insight),
     giSpecialistPlan: strOrNull(data.gi_specialist_plan),
@@ -406,9 +445,13 @@ export async function loadGiReportsForOwner(
           familyHistory: strOrNull(health.familyHistory),
           lifestyleNotes: strOrNull(health.lifestyleNotes),
           primaryCarePhysician: strOrNull(health.primaryCarePhysician),
-          pcpPhoneFax: strOrNull(health.pcpPhoneFax),
+          // Legacy fallback: pre-split cases stored a combined phone+fax string.
+          pcpPhone: strOrNull(health.pcpPhone) ?? strOrNull(health.pcpPhoneFax),
+          pcpFax: strOrNull(health.pcpFax),
           pharmacyInformation: strOrNull(health.pharmacyInformation),
-          pharmacyPhoneFax: strOrNull(health.pharmacyPhoneFax),
+          pharmacyPhone:
+            strOrNull(health.pharmacyPhone) ?? strOrNull(health.pharmacyPhoneFax),
+          pharmacyFax: strOrNull(health.pharmacyFax),
         });
       } catch {
         aboutByCase.set(caseId, EMPTY_INTAKE);
@@ -436,6 +479,22 @@ export async function loadGiReportsForOwner(
     })
   );
 
+  // Resolve each distinct GI specialist's e-signature once, then reuse it across
+  // all their reports (a PCP often has several reports from the same specialist).
+  const distinctGiIds = [
+    ...new Set(
+      matched
+        .map((s) => (typeof s.data.gi_specialist_id === "string" ? s.data.gi_specialist_id : ""))
+        .filter(Boolean)
+    ),
+  ];
+  const signatureByGiId = new Map<string, string | null>();
+  await Promise.all(
+    distinctGiIds.map(async (giId) => {
+      signatureByGiId.set(giId, await fetchGiSignatureUrl(giId));
+    })
+  );
+
   const out: GiSharedReport[] = [];
   for (const s of matched) {
     const caseId = String(s.data.case_id);
@@ -446,13 +505,17 @@ export async function loadGiReportsForOwner(
       .map((id) => filesById.get(id))
       .filter((f): f is GiMedicalFile => Boolean(f));
 
+    const giId =
+      typeof s.data.gi_specialist_id === "string" ? s.data.gi_specialist_id : "";
+
     out.push(
       parseSharedReport(
         s.id,
         s.data,
         { ...about, shortCode: ownedCases.get(caseId)! },
         files,
-        remarkCountByReport.get(s.id) ?? 0
+        remarkCountByReport.get(s.id) ?? 0,
+        signatureByGiId.get(giId) ?? null
       )
     );
   }

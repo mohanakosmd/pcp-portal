@@ -1869,7 +1869,7 @@
   min-width: 0;
 }
 
-/* Lab reports / Other attachments use hidden inputs triggered by their button
+/* Lab Investigations / Other attachments use hidden inputs triggered by their button
    (the primary drop zone keeps its transparent full-area overlay input). */
 .cc-doc-secondary__col .cc-file-input {
   display: none;

@@ -255,6 +255,40 @@ export async function emitCaseShared(opts: {
   });
 }
 
+// Fired when a PCP shares a submitted case with the Medical Assistant (MA)
+// team from the Cases page. Unlike the GI share this doesn't route to a named
+// specialist — MA staff pick these up — so we only send the PCP a confirmation,
+// worded for MA (not GI).
+export async function emitCaseSharedWithMa(opts: {
+  caseId: string;
+  caseShortCode: string;
+  ownerUserId: string;
+}): Promise<void> {
+  const pcp = await readPcp(opts.ownerUserId);
+  const pcpGreeting = pcp?.name?.trim() || "there";
+
+  const title = `Case #${opts.caseShortCode} shared with the Medical Assistant team`;
+  const body = "A Medical Assistant will review your case and follow up.";
+  await emitOne({
+    type: "case_shared",
+    caseId: opts.caseId,
+    caseShortCode: opts.caseShortCode,
+    title,
+    body,
+    recipientUserId: opts.ownerUserId,
+    recipientType: "pcp",
+    recipientEmail: pcp?.email || null,
+    emailSubject: title,
+    emailHtml: pcpEmailHtml({
+      greetingName: pcpGreeting,
+      heading: title,
+      body,
+      ctaLabel: "View case",
+      ctaUrl: appUrl(`/cases`),
+    }),
+  });
+}
+
 // Fired when a PCP posts a remark on a GI-shared report. Notifies the GI
 // specialist the report was shared with (in-app + best-effort email).
 export async function emitReportRemarkAdded(opts: {

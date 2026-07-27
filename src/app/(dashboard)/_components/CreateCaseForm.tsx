@@ -20,13 +20,14 @@ import { US_STATES, phoneStateMismatch, usStateName } from "@/lib/us-area-codes"
 
 import { HPI_FIELDS, HpiExtractPanel, type HpiField } from "./HpiExtractPanel";
 import { MedicationPicker } from "./MedicationPicker";
+import { MicIcon } from "./MicIcon";
 import { useSpeechToText } from "./useSpeechToText";
 
 type StepNumber = 1 | 2 | 3;
 
 /**
- * Health fields that support dictation. Free text only — BMI is numeric and the
- * phone/fax fields are digit strings, so speech would produce garbage in both.
+ * Health fields that support dictation. Free text only — the phone/fax fields
+ * are digit strings, so speech would produce garbage in them.
  */
 type DictationField =
   | "inboxMessage"
@@ -44,25 +45,29 @@ const HEALTH_FIELD_NAMES: Record<DictationField, string> = {
   pharmacyInformation: "Pharmacy Information",
 };
 
-function MicIcon() {
-  return (
-    <svg width="22" height="22" viewBox="0 0 24 24" fill="none" aria-hidden="true">
-      <rect x="9" y="4" width="6" height="10" rx="3" stroke="currentColor" strokeWidth="1.9" />
-      <path
-        d="M6.5 11.5V12a5.5 5.5 0 0011 0v-.5"
-        stroke="currentColor"
-        strokeWidth="1.9"
-        strokeLinecap="round"
-      />
-      <path d="M12 17.5V21" stroke="currentColor" strokeWidth="1.9" strokeLinecap="round" />
-      <path d="M9 21h6" stroke="currentColor" strokeWidth="1.9" strokeLinecap="round" />
-    </svg>
-  );
-}
-
 // The three document upload widgets, each validated/highlighted independently.
 type DocSection = "primary" | "lab" | "other";
 type DocErrorMap = Record<DocSection, string[]>;
+
+/** Firestore document `kind` each upload tile stores, so the tile a file was
+ *  dropped into survives a reload. Must stay within VALID_KINDS in
+ *  src/app/api/cases/[caseId]/documents/route.ts. */
+const SECTION_KIND: Record<DocSection, string> = {
+  primary: "medical_record",
+  lab: "lab",
+  other: "other",
+};
+
+/** Tile name shown on a freshly picked (not yet uploaded) file row. Kept
+ *  separate from formatExistingDocLabel's map on purpose: files uploaded
+ *  before `medical_record` existed are all stored as `other`, and labelling
+ *  those "Other attachments" would misreport where they actually came from —
+ *  they stay the neutral "Document". */
+const SECTION_LABEL: Record<DocSection, string> = {
+  primary: "Medical Records",
+  lab: "Lab Investigations",
+  other: "Other attachments",
+};
 
 const STEPS: { id: StepNumber; label: string }[] = [
   { id: 1, label: "Patient details" },
@@ -115,6 +120,9 @@ type UploadedFile = {
   serverFileId?: string; // pcp_cases/{id}/documents/{fileId} once uploaded
   name: string;
   meta: string;
+  /** Firestore document `kind` — the upload tile this file came from. Sent on
+   *  upload so the tile survives a reload. */
+  kind: string;
   status: UploadStatus;
   error?: string;
 };
@@ -159,9 +167,11 @@ export type InitialCase = {
     pastSurgicalHistory: string;
     socialHistory: string;
     primaryCarePhysician: string;
-    pcpPhoneFax: string;
+    pcpPhone: string;
+    pcpFax: string;
     pharmacyInformation: string;
-    pharmacyPhoneFax: string;
+    pharmacyPhone: string;
+    pharmacyFax: string;
   };
   documents: InitialCaseDocument[];
 };
@@ -192,7 +202,8 @@ function formatBytes(bytes: number): string {
 
 function formatExistingDocLabel(kind: string, contentType: string): string {
   const kinds: Record<string, string> = {
-    lab: "Lab report",
+    medical_record: "Medical Records",
+    lab: "Lab Investigations",
     imaging: "Imaging",
     note: "Note",
     hpi_history: "HPI history",
@@ -203,7 +214,7 @@ function formatExistingDocLabel(kind: string, contentType: string): string {
   return "Document";
 }
 
-function formatFileMeta(file: File): string {
+function formatFileMeta(file: File, section: DocSection): string {
   const sizeMb = file.size / (1024 * 1024);
   const sizeKb = file.size / 1024;
   const sizeLabel = sizeMb >= 1 ? `${sizeMb.toFixed(1)} MB` : `${Math.round(sizeKb)} KB`;
@@ -211,7 +222,9 @@ function formatFileMeta(file: File): string {
     ? "Image"
     : file.name.split(".").pop()?.toUpperCase() || "File";
   const time = new Date().toLocaleTimeString([], { hour: "numeric", minute: "2-digit" });
-  return `${kindLabel} · ${sizeLabel} · Today, ${time}`;
+  // Lead with the tile the file came from — with three upload targets, the row
+  // is otherwise ambiguous once several files are listed together.
+  return `${SECTION_LABEL[section]} · ${kindLabel} · ${sizeLabel} · Today, ${time}`;
 }
 
 /**
@@ -279,6 +292,7 @@ export function CreateCaseForm({
           serverFileId: d.fileId,
           name: d.fileName,
           meta: `${formatExistingDocLabel(d.kind, d.contentType)} · ${formatBytes(d.sizeBytes)}`,
+          kind: d.kind,
           status: "done" as const,
         }))
       : initialFiles
@@ -295,7 +309,6 @@ export function CreateCaseForm({
   const [currentMedications, setCurrentMedications] = useState(
     initialCase?.health.currentMedications ?? ""
   );
-  const [bmi, setBmi] = useState(initialCase?.health.bmi ?? "");
   const [allergies, setAllergies] = useState(initialCase?.health.allergies ?? "");
   const [pastSurgicalHistory, setPastSurgicalHistory] = useState(
     initialCase?.health.pastSurgicalHistory ?? ""
@@ -309,16 +322,18 @@ export function CreateCaseForm({
   const [primaryCarePhysician, setPrimaryCarePhysician] = useState(
     initialCase?.health.primaryCarePhysician || pcpProfile?.name || ""
   );
-  const [pcpPhoneFax, setPcpPhoneFax] = useState(
-    initialCase?.health.pcpPhoneFax ||
+  const [pcpPhone, setPcpPhone] = useState(
+    initialCase?.health.pcpPhone ||
       (pcpProfile?.phone ? formatUsPhone(pcpProfile.phone) : "")
   );
+  const [pcpFax, setPcpFax] = useState(initialCase?.health.pcpFax ?? "");
   const [pharmacyInformation, setPharmacyInformation] = useState(
     initialCase?.health.pharmacyInformation ?? ""
   );
-  const [pharmacyPhoneFax, setPharmacyPhoneFax] = useState(
-    initialCase?.health.pharmacyPhoneFax ?? ""
+  const [pharmacyPhone, setPharmacyPhone] = useState(
+    initialCase?.health.pharmacyPhone ?? ""
   );
+  const [pharmacyFax, setPharmacyFax] = useState(initialCase?.health.pharmacyFax ?? "");
   // HPI History document: the HpiExtractPanel owns the parse/review workflow and
   // hands the staged file up via onFileChange. Held here so it's uploaded (like
   // the insurance cards) on save/submit.
@@ -459,14 +474,15 @@ export function CreateCaseForm({
     return {
       inboxMessage,
       currentMedications,
-      bmi,
       allergies,
       pastSurgicalHistory,
       socialHistory,
       primaryCarePhysician,
-      pcpPhoneFax,
+      pcpPhone,
+      pcpFax,
       pharmacyInformation,
-      pharmacyPhoneFax,
+      pharmacyPhone,
+      pharmacyFax,
       urgencyLevel: "routine",
     };
   }
@@ -519,9 +535,9 @@ export function CreateCaseForm({
    * Per-field validation for the Health step (Step 2). Returns a
    * { fieldKey: message } map (empty when valid) so messages render inline under
    * each field, matching Step 1. The reason for consultation is required to
-   * advance/submit (requireInbox); BMI, when provided, must be a plausible number.
-   * Every other Health field is optional free text (pharmacy, allergies, social
-   * history included). Step 3 (Files) has no required fields.
+   * advance/submit (requireInbox); the phone/fax fields, when provided, must be
+   * valid numbers. Every other Health field is optional free text (pharmacy,
+   * allergies, social history included). Step 3 (Files) has no required fields.
    */
   function healthFieldErrors(opts: { requireInbox: boolean }): Record<string, string> {
     const errs: Record<string, string> = {};
@@ -530,12 +546,14 @@ export function CreateCaseForm({
       errs.inboxMessage = "Add the reason for consultation before continuing.";
     }
 
-    const bmiVal = bmi.trim();
-    if (bmiVal) {
-      const n = Number(bmiVal);
-      if (!Number.isFinite(n) || n < 10 || n > 80) {
-        errs.bmi = "Enter a valid BMI between 10 and 80.";
-      }
+    const phoneFields: [string, string, string][] = [
+      [pcpPhone, "pcpPhone", "Enter a valid PCP phone number."],
+      [pcpFax, "pcpFax", "Enter a valid PCP fax number."],
+      [pharmacyPhone, "pharmacyPhone", "Enter a valid pharmacy phone number."],
+      [pharmacyFax, "pharmacyFax", "Enter a valid pharmacy fax number."],
+    ];
+    for (const [value, key, message] of phoneFields) {
+      if (value.trim() && !isValidUsPhone(value)) errs[key] = message;
     }
 
     return errs;
@@ -703,6 +721,23 @@ export function CreateCaseForm({
     });
   }, []);
 
+  // Validates a phone/fax field when the user leaves it, so an invalid entry is
+  // flagged immediately instead of only on Next/Submit. Empty is allowed (all
+  // phone/fax fields are optional).
+  const validatePhoneOnBlur = useCallback(
+    (key: string, value: string, message: string) => {
+      setFieldErrors((prev) => {
+        const invalid = value.trim() !== "" && !isValidUsPhone(value);
+        if (invalid) return { ...prev, [key]: message };
+        if (!prev[key]) return prev;
+        const next = { ...prev };
+        delete next[key];
+        return next;
+      });
+    },
+    []
+  );
+
   // Previous is always allowed (reviewing/editing an earlier part).
   const handlePrev = () => {
     if (currentStep > 1) {
@@ -734,7 +769,7 @@ export function CreateCaseForm({
       setFiles((prev) =>
         prev.map((f) => (f.id === entry.id ? { ...f, status: "uploading" as const } : f))
       );
-      const result = await uploadOneFile(id, entry.file as File, "other");
+      const result = await uploadOneFile(id, entry.file as File, entry.kind);
       setFiles((prev) =>
         prev.map((f) =>
           f.id === entry.id
@@ -815,8 +850,8 @@ export function CreateCaseForm({
       if (currentStep !== 1) goToStep(1);
       return;
     }
-    // Drafts may be incomplete (no inbox message yet), but a BMI that's typed
-    // must still be valid before we persist it.
+    // Drafts may be incomplete (no inbox message yet), but any phone/fax that's
+    // typed must still be valid before we persist it.
     const healthErrs = healthFieldErrors({ requireInbox: false });
     if (Object.keys(healthErrs).length) {
       setFieldErrors(healthErrs);
@@ -949,7 +984,8 @@ export function CreateCaseForm({
       id: `${file.name}-${file.lastModified}-${Math.random().toString(36).slice(2, 7)}`,
       file,
       name: file.name,
-      meta: formatFileMeta(file),
+      meta: formatFileMeta(file, section),
+      kind: SECTION_KIND[section],
       status: "pending" as const,
     }));
     setFiles((prev) => [...prev, ...entries]);
@@ -1041,30 +1077,55 @@ export function CreateCaseForm({
     [isListening, toggleSpeech]
   );
 
-  // The Step 2 Health field setters, keyed for HpiExtractPanel's onApply. Reads
-  // the current values it needs from the same state below.
+  // The Step 2 Health field setters, keyed by HPI field. setState identities are
+  // stable, so this map never changes.
+  const hpiSetters = useMemo<Record<HpiField, (v: string) => void>>(
+    () => ({
+      allergies: setAllergies,
+      currentMedications: setCurrentMedications,
+      pastSurgicalHistory: setPastSurgicalHistory,
+      socialHistory: setSocialHistory,
+      pharmacyInformation: setPharmacyInformation,
+      pharmacyPhone: setPharmacyPhone,
+      pharmacyFax: setPharmacyFax,
+      primaryCarePhysician: setPrimaryCarePhysician,
+      pcpPhone: setPcpPhone,
+      pcpFax: setPcpFax,
+    }),
+    []
+  );
+
+  // Fields the currently-attached HPI document pre-populated (auto-filled or
+  // opt-in replaced), so they can be blanked when the document is swapped.
+  const appliedHpiFieldsRef = useRef<Set<HpiField>>(new Set());
+
   const hpiApply = useCallback(
     (values: Partial<Record<HpiField, string>>) => {
-      const setters: Record<HpiField, (v: string) => void> = {
-        allergies: setAllergies,
-        currentMedications: setCurrentMedications,
-        pastSurgicalHistory: setPastSurgicalHistory,
-        socialHistory: setSocialHistory,
-        pharmacyInformation: setPharmacyInformation,
-        pharmacyPhoneFax: setPharmacyPhoneFax,
-        primaryCarePhysician: setPrimaryCarePhysician,
-        pcpPhoneFax: setPcpPhoneFax,
-        bmi: setBmi,
-      };
       for (const key of HPI_FIELDS) {
         const v = values[key];
-        if (v !== undefined) setters[key](v);
+        if (v !== undefined) {
+          hpiSetters[key](v);
+          appliedHpiFieldsRef.current.add(key);
+        }
       }
-      // BMI is the one extracted field with its own validation rule; a document
-      // with an implausible number shouldn't leave a stale error showing.
-      if (values.bmi !== undefined) clearFieldError("bmi");
     },
-    [clearFieldError]
+    [hpiSetters]
+  );
+
+  // When the HPI document is swapped for a different one (or removed), blank the
+  // fields the previous document pre-populated so they repopulate from the new
+  // file instead of keeping the old file's extracted text. Only tracked
+  // (HPI-populated) fields are cleared — manually-typed values are left intact.
+  const handleHpiFileChange = useCallback(
+    (file: File | null) => {
+      for (const key of appliedHpiFieldsRef.current) {
+        hpiSetters[key]("");
+        clearFieldError(key);
+      }
+      appliedHpiFieldsRef.current = new Set();
+      setHpiFile(file);
+    },
+    [hpiSetters, clearFieldError]
   );
 
   const hpiCurrentValues: Record<HpiField, string> = {
@@ -1073,10 +1134,11 @@ export function CreateCaseForm({
     pastSurgicalHistory,
     socialHistory,
     pharmacyInformation,
-    pharmacyPhoneFax,
+    pharmacyPhone,
+    pharmacyFax,
     primaryCarePhysician,
-    pcpPhoneFax,
-    bmi,
+    pcpPhone,
+    pcpFax,
   };
 
   const nextLabel = NEXT_LABELS[currentStep];
@@ -1232,11 +1294,6 @@ export function CreateCaseForm({
           }}
           currentMedications={currentMedications}
           onCurrentMedicationsChange={setCurrentMedications}
-          bmi={bmi}
-          onBmiChange={(v) => {
-            setBmi(v);
-            clearFieldError("bmi");
-          }}
           allergies={allergies}
           onAllergiesChange={setAllergies}
           pastSurgicalHistory={pastSurgicalHistory}
@@ -1245,12 +1302,48 @@ export function CreateCaseForm({
           onSocialHistoryChange={setSocialHistory}
           primaryCarePhysician={primaryCarePhysician}
           onPrimaryCarePhysicianChange={setPrimaryCarePhysician}
-          pcpPhoneFax={pcpPhoneFax}
-          onPcpPhoneFaxChange={setPcpPhoneFax}
+          pcpPhone={pcpPhone}
+          onPcpPhoneChange={(v) => {
+            setPcpPhone(formatUsPhone(v));
+            clearFieldError("pcpPhone");
+          }}
+          onPcpPhoneBlur={() =>
+            validatePhoneOnBlur("pcpPhone", pcpPhone, "Enter a valid PCP phone number.")
+          }
+          pcpFax={pcpFax}
+          onPcpFaxChange={(v) => {
+            setPcpFax(formatUsPhone(v));
+            clearFieldError("pcpFax");
+          }}
+          onPcpFaxBlur={() =>
+            validatePhoneOnBlur("pcpFax", pcpFax, "Enter a valid PCP fax number.")
+          }
           pharmacyInformation={pharmacyInformation}
           onPharmacyInformationChange={setPharmacyInformation}
-          pharmacyPhoneFax={pharmacyPhoneFax}
-          onPharmacyPhoneFaxChange={setPharmacyPhoneFax}
+          pharmacyPhone={pharmacyPhone}
+          onPharmacyPhoneChange={(v) => {
+            setPharmacyPhone(formatUsPhone(v));
+            clearFieldError("pharmacyPhone");
+          }}
+          onPharmacyPhoneBlur={() =>
+            validatePhoneOnBlur(
+              "pharmacyPhone",
+              pharmacyPhone,
+              "Enter a valid pharmacy phone number."
+            )
+          }
+          pharmacyFax={pharmacyFax}
+          onPharmacyFaxChange={(v) => {
+            setPharmacyFax(formatUsPhone(v));
+            clearFieldError("pharmacyFax");
+          }}
+          onPharmacyFaxBlur={() =>
+            validatePhoneOnBlur(
+              "pharmacyFax",
+              pharmacyFax,
+              "Enter a valid pharmacy fax number."
+            )
+          }
           speechStatus={speechStatus}
           speechSupported={speechSupported}
           isListening={isListening}
@@ -1258,7 +1351,7 @@ export function CreateCaseForm({
           onToggleDictation={handleToggleDictation}
           hpiCurrentValues={hpiCurrentValues}
           onHpiApply={hpiApply}
-          onHpiFileChange={setHpiFile}
+          onHpiFileChange={handleHpiFileChange}
           errors={fieldErrors}
         />
         <Step3Panel
@@ -1806,8 +1899,6 @@ type Step2PanelProps = {
   onInboxChange: (value: string) => void;
   currentMedications: string;
   onCurrentMedicationsChange: (value: string) => void;
-  bmi: string;
-  onBmiChange: (value: string) => void;
   allergies: string;
   onAllergiesChange: (value: string) => void;
   pastSurgicalHistory: string;
@@ -1816,12 +1907,20 @@ type Step2PanelProps = {
   onSocialHistoryChange: (value: string) => void;
   primaryCarePhysician: string;
   onPrimaryCarePhysicianChange: (value: string) => void;
-  pcpPhoneFax: string;
-  onPcpPhoneFaxChange: (value: string) => void;
+  pcpPhone: string;
+  onPcpPhoneChange: (value: string) => void;
+  onPcpPhoneBlur: () => void;
+  pcpFax: string;
+  onPcpFaxChange: (value: string) => void;
+  onPcpFaxBlur: () => void;
   pharmacyInformation: string;
   onPharmacyInformationChange: (value: string) => void;
-  pharmacyPhoneFax: string;
-  onPharmacyPhoneFaxChange: (value: string) => void;
+  pharmacyPhone: string;
+  onPharmacyPhoneChange: (value: string) => void;
+  onPharmacyPhoneBlur: () => void;
+  pharmacyFax: string;
+  onPharmacyFaxChange: (value: string) => void;
+  onPharmacyFaxBlur: () => void;
   speechStatus: string;
   speechSupported: boolean;
   isListening: boolean;
@@ -1839,8 +1938,6 @@ function Step2Panel({
   onInboxChange,
   currentMedications,
   onCurrentMedicationsChange,
-  bmi,
-  onBmiChange,
   allergies,
   onAllergiesChange,
   pastSurgicalHistory,
@@ -1849,12 +1946,20 @@ function Step2Panel({
   onSocialHistoryChange,
   primaryCarePhysician,
   onPrimaryCarePhysicianChange,
-  pcpPhoneFax,
-  onPcpPhoneFaxChange,
+  pcpPhone,
+  onPcpPhoneChange,
+  onPcpPhoneBlur,
+  pcpFax,
+  onPcpFaxChange,
+  onPcpFaxBlur,
   pharmacyInformation,
   onPharmacyInformationChange,
-  pharmacyPhoneFax,
-  onPharmacyPhoneFaxChange,
+  pharmacyPhone,
+  onPharmacyPhoneChange,
+  onPharmacyPhoneBlur,
+  pharmacyFax,
+  onPharmacyFaxChange,
+  onPharmacyFaxBlur,
   speechStatus,
   speechSupported,
   isListening,
@@ -2023,22 +2128,12 @@ function Step2Panel({
 
             <div className="cc-form-section">
               <div className="cc-grid cc-grid--2 cc-step1-fields">
-                <div className="cc-field">
-                  <label htmlFor="cc-bmi">
-                    BMI <Opt />
-                  </label>
-                  <input
-                    className="cc-input"
-                    id="cc-bmi"
-                    name="bmi"
-                    type="text"
-                    inputMode="decimal"
-                    placeholder="e.g. 24.5"
-                    value={bmi}
-                    onChange={(e) => onBmiChange(e.target.value)}
-                    aria-invalid={errors.bmi ? true : undefined}
+                <div className="cc-step1-field-full">
+                  <HpiExtractPanel
+                    currentValues={hpiCurrentValues}
+                    onApply={onHpiApply}
+                    onFileChange={onHpiFileChange}
                   />
-                  {fieldError("bmi")}
                 </div>
                 <div className="cc-field">
                   <label htmlFor="cc-pcp">
@@ -2049,38 +2144,82 @@ function Step2Panel({
                     id="cc-pcp"
                     name="primary_care_physician"
                     type="text"
-                    placeholder="Dr. name / clinic"
+                    placeholder="Pcp name"
                     value={primaryCarePhysician}
                     onChange={(e) => onPrimaryCarePhysicianChange(e.target.value)}
                   />
                 </div>
                 <div className="cc-field">
-                  <label htmlFor="cc-pcp-phone-fax">
-                    PCP Phone &amp; Fax <Opt />
+                  <label htmlFor="cc-pcp-phone">
+                    PCP Phone <Opt />
                   </label>
                   <input
                     className="cc-input"
-                    id="cc-pcp-phone-fax"
-                    name="pcp_phone_fax"
-                    type="text"
-                    placeholder="Phone · Fax"
-                    value={pcpPhoneFax}
-                    onChange={(e) => onPcpPhoneFaxChange(e.target.value)}
+                    id="cc-pcp-phone"
+                    name="pcp_phone"
+                    type="tel"
+                    inputMode="tel"
+                    placeholder="+1 (555) 123-4567"
+                    value={pcpPhone}
+                    onChange={(e) => onPcpPhoneChange(e.target.value)}
+                    onBlur={onPcpPhoneBlur}
+                    aria-invalid={errors.pcpPhone ? true : undefined}
                   />
+                  {fieldError("pcpPhone")}
                 </div>
                 <div className="cc-field">
-                  <label htmlFor="cc-pharmacy-phone-fax">
-                    Pharmacy Phone &amp; Fax <Opt />
+                  <label htmlFor="cc-pcp-fax">
+                    PCP Fax <Opt />
                   </label>
                   <input
                     className="cc-input"
-                    id="cc-pharmacy-phone-fax"
-                    name="pharmacy_phone_fax"
-                    type="text"
-                    placeholder="Phone · Fax"
-                    value={pharmacyPhoneFax}
-                    onChange={(e) => onPharmacyPhoneFaxChange(e.target.value)}
+                    id="cc-pcp-fax"
+                    name="pcp_fax"
+                    type="tel"
+                    inputMode="tel"
+                    placeholder="+1 (555) 123-4567"
+                    value={pcpFax}
+                    onChange={(e) => onPcpFaxChange(e.target.value)}
+                    onBlur={onPcpFaxBlur}
+                    aria-invalid={errors.pcpFax ? true : undefined}
                   />
+                  {fieldError("pcpFax")}
+                </div>
+                <div className="cc-field">
+                  <label htmlFor="cc-pharmacy-phone">
+                    Pharmacy Phone <Opt />
+                  </label>
+                  <input
+                    className="cc-input"
+                    id="cc-pharmacy-phone"
+                    name="pharmacy_phone"
+                    type="tel"
+                    inputMode="tel"
+                    placeholder="+1 (555) 123-4567"
+                    value={pharmacyPhone}
+                    onChange={(e) => onPharmacyPhoneChange(e.target.value)}
+                    onBlur={onPharmacyPhoneBlur}
+                    aria-invalid={errors.pharmacyPhone ? true : undefined}
+                  />
+                  {fieldError("pharmacyPhone")}
+                </div>
+                <div className="cc-field">
+                  <label htmlFor="cc-pharmacy-fax">
+                    Pharmacy Fax <Opt />
+                  </label>
+                  <input
+                    className="cc-input"
+                    id="cc-pharmacy-fax"
+                    name="pharmacy_fax"
+                    type="tel"
+                    inputMode="tel"
+                    placeholder="+1 (555) 123-4567"
+                    value={pharmacyFax}
+                    onChange={(e) => onPharmacyFaxChange(e.target.value)}
+                    onBlur={onPharmacyFaxBlur}
+                    aria-invalid={errors.pharmacyFax ? true : undefined}
+                  />
+                  {fieldError("pharmacyFax")}
                 </div>
                 <div className="cc-field cc-step1-field-full">
                   <label htmlFor="cc-pharmacy-info">
@@ -2096,13 +2235,6 @@ function Step2Panel({
                     onChange={(e) => onPharmacyInformationChange(e.target.value)}
                   />
                   {dictation("pharmacyInformation")}
-                </div>
-                <div className="cc-step1-field-full">
-                  <HpiExtractPanel
-                    currentValues={hpiCurrentValues}
-                    onApply={onHpiApply}
-                    onFileChange={onHpiFileChange}
-                  />
                 </div>
                 <div className="cc-field cc-step1-field-full">
                   <label htmlFor="cc-allergies">
@@ -2269,8 +2401,11 @@ function Step3Panel({
                     />
                   </svg>
                 </span>
-                <strong>Drag &amp; drop files here</strong>
-                <p>Supported formats: {ACCEPTED_DOC_LABEL} · Max 5 MB per file</p>
+                <strong>Medical Records</strong>
+                <p>
+                  Drag &amp; drop files here · Supported formats: {ACCEPTED_DOC_LABEL} · Max
+                  5 MB per file
+                </p>
               </div>
               <input
                 ref={fileInputRef}
@@ -2312,7 +2447,7 @@ function Step3Panel({
                       />
                     </svg>
                   </span>
-                  <strong>Lab reports</strong>
+                  <strong>Lab Investigations</strong>
                   <span className="cc-drop__hint">{ACCEPTED_DOC_LABEL}</span>
                 </button>
                 <input

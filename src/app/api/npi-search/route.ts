@@ -13,9 +13,17 @@ export async function GET(request: Request) {
   const firstName = (searchParams.get("first_name") ?? "").trim();
   const lastName = (searchParams.get("last_name") ?? "").trim();
   const state = (searchParams.get("state") ?? "").trim();
+  const number = (searchParams.get("number") ?? "").replace(/\D/g, "");
   const limit = (searchParams.get("limit") ?? "").trim() || "10";
 
-  if (!firstName && !lastName) {
+  if (number) {
+    if (number.length !== 10) {
+      return NextResponse.json(
+        { error: "Enter a valid 10-digit NPI number." },
+        { status: 400 }
+      );
+    }
+  } else if (!firstName && !lastName) {
     return NextResponse.json(
       { error: "Enter a first or last name to search." },
       { status: 400 }
@@ -23,9 +31,13 @@ export async function GET(request: Request) {
   }
 
   const params = new URLSearchParams({ limit });
-  if (firstName) params.set("first_name", firstName);
-  if (lastName) params.set("last_name", lastName);
-  if (state) params.set("state", state);
+  if (number) {
+    params.set("npi_number", number);
+  } else {
+    if (firstName) params.set("first_name", firstName);
+    if (lastName) params.set("last_name", lastName);
+    if (state) params.set("state", state);
+  }
 
   try {
     const res = await fetch(`${NPI_SEARCH_URL}?${params.toString()}`, {

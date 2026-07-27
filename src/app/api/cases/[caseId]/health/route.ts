@@ -11,6 +11,7 @@ import {
   type UrgencyLevel,
 } from "@/lib/cases";
 import { getDocument, nowIso, upsertDocument } from "@/lib/firestore-rest";
+import { isValidUsPhone } from "@/lib/phone";
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
@@ -27,9 +28,11 @@ type HealthBody = Partial<{
   familyHistory: unknown;
   lifestyleNotes: unknown;
   primaryCarePhysician: unknown;
-  pcpPhoneFax: unknown;
+  pcpPhone: unknown;
+  pcpFax: unknown;
   pharmacyInformation: unknown;
-  pharmacyPhoneFax: unknown;
+  pharmacyPhone: unknown;
+  pharmacyFax: unknown;
   urgencyLevel: unknown;
 }>;
 
@@ -72,8 +75,29 @@ export async function PATCH(
     }
   }
 
+  // Phone/Fax fields are optional, but when provided each must be a valid US
+  // phone number. Mirrors the client-side rule for the same messages.
+  const phoneChecks: [keyof HealthBody, string][] = [
+    ["pcpPhone", "Enter a valid PCP phone number."],
+    ["pcpFax", "Enter a valid PCP fax number."],
+    ["pharmacyPhone", "Enter a valid pharmacy phone number."],
+    ["pharmacyFax", "Enter a valid pharmacy fax number."],
+  ];
+  for (const [key, message] of phoneChecks) {
+    const v = body[key];
+    if (typeof v === "string" && v.trim() && !isValidUsPhone(v)) {
+      return NextResponse.json({ error: message }, { status: 400 });
+    }
+  }
+
   try {
-    await readCaseOwnedBy(caseId, userId);
+    const root = await readCaseOwnedBy(caseId, userId);
+    if (root.sharedWithMa === true) {
+      return NextResponse.json(
+        { error: "This case has been shared with MA and can no longer be edited." },
+        { status: 409 }
+      );
+    }
 
     const existing = await getDocument(`${PCP_CASES_COLLECTION}/${caseId}/health`, "data");
     const prev = (existing?.data ?? {}) as Partial<CaseHealthDoc>;
@@ -114,15 +138,17 @@ export async function PATCH(
     const primaryCarePhysician = has("primaryCarePhysician")
       ? asStr(body.primaryCarePhysician, 200)
       : prev.primaryCarePhysician ?? null;
-    const pcpPhoneFax = has("pcpPhoneFax")
-      ? asStr(body.pcpPhoneFax, 200)
-      : prev.pcpPhoneFax ?? null;
+    const pcpPhone = has("pcpPhone") ? asStr(body.pcpPhone, 40) : prev.pcpPhone ?? null;
+    const pcpFax = has("pcpFax") ? asStr(body.pcpFax, 40) : prev.pcpFax ?? null;
     const pharmacyInformation = has("pharmacyInformation")
       ? asStr(body.pharmacyInformation, 500)
       : prev.pharmacyInformation ?? null;
-    const pharmacyPhoneFax = has("pharmacyPhoneFax")
-      ? asStr(body.pharmacyPhoneFax, 200)
-      : prev.pharmacyPhoneFax ?? null;
+    const pharmacyPhone = has("pharmacyPhone")
+      ? asStr(body.pharmacyPhone, 40)
+      : prev.pharmacyPhone ?? null;
+    const pharmacyFax = has("pharmacyFax")
+      ? asStr(body.pharmacyFax, 40)
+      : prev.pharmacyFax ?? null;
     const urgencyLevel = has("urgencyLevel")
       ? asUrgency(body.urgencyLevel)
       : prev.urgencyLevel ?? null;
@@ -140,9 +166,11 @@ export async function PATCH(
       familyHistory,
       lifestyleNotes,
       primaryCarePhysician,
-      pcpPhoneFax,
+      pcpPhone,
+      pcpFax,
       pharmacyInformation,
-      pharmacyPhoneFax,
+      pharmacyPhone,
+      pharmacyFax,
       urgencyLevel,
       updatedAt: now,
       updatedByUserId: userId,

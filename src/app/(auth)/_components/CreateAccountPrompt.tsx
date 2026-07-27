@@ -55,6 +55,7 @@ type ToastState = {
 type NpiAddress = {
   city?: string;
   state?: string;
+  postalCode?: string;
   phone?: string;
 };
 
@@ -96,15 +97,19 @@ export function CreateAccountPrompt() {
   const [password, setPassword] = useState("");
   const [confirmPassword, setConfirmPassword] = useState("");
   const [showPassword, setShowPassword] = useState(false);
+  const [showConfirmPassword, setShowConfirmPassword] = useState(false);
   const [country, setCountry] = useState<Country>(DEFAULT_COUNTRY);
   const [countryOpen, setCountryOpen] = useState(false);
   const [countryQuery, setCountryQuery] = useState("");
   const countryRef = useRef<HTMLDivElement | null>(null);
 
   // NPI registry search (step 1).
+  const [npiMode, setNpiMode] = useState<"name" | "number">("name");
   const [npiFirst, setNpiFirst] = useState("");
   const [npiLast, setNpiLast] = useState("");
   const [npiState, setNpiState] = useState("");
+  const [npiNumber, setNpiNumber] = useState("");
+  const [selectedProvider, setSelectedProvider] = useState<NpiResult | null>(null);
   const [npiResults, setNpiResults] = useState<NpiResult[] | null>(null);
   const [npiLoading, setNpiLoading] = useState(false);
   const [npiError, setNpiError] = useState("");
@@ -200,9 +205,13 @@ export function CreateAccountPrompt() {
     setPassword("");
     setConfirmPassword("");
     setShowPassword(false);
+    setShowConfirmPassword(false);
+    setNpiMode("name");
     setNpiFirst("");
     setNpiLast("");
     setNpiState("");
+    setNpiNumber("");
+    setSelectedProvider(null);
     setNpiResults(null);
     setNpiError("");
     setOtpDigits(Array.from({ length: OTP_LENGTH }, () => ""));
@@ -248,7 +257,14 @@ export function CreateAccountPrompt() {
   const runNpiSearch = useCallback(async () => {
     const first = npiFirst.trim();
     const last = npiLast.trim();
-    if (!first && !last) {
+    const number = npiNumber.replace(/\D/g, "");
+    if (npiMode === "number") {
+      if (!number) {
+        setNpiResults(null);
+        setNpiError("");
+        return;
+      }
+    } else if (!first && !last) {
       setNpiResults(null);
       setNpiError("");
       return;
@@ -258,9 +274,13 @@ export function CreateAccountPrompt() {
     setNpiError("");
     try {
       const params = new URLSearchParams({ limit: "10" });
-      if (first) params.set("first_name", first);
-      if (last) params.set("last_name", last);
-      if (npiState) params.set("state", npiState);
+      if (npiMode === "number") {
+        params.set("number", number);
+      } else {
+        if (first) params.set("first_name", first);
+        if (last) params.set("last_name", last);
+        if (npiState) params.set("state", npiState);
+      }
       const res = await fetch(`/api/npi-search?${params.toString()}`);
       const data = (await res.json().catch(() => ({}))) as {
         results?: NpiResult[];
@@ -278,13 +298,17 @@ export function CreateAccountPrompt() {
     } finally {
       if (seq === searchSeq.current) setNpiLoading(false);
     }
-  }, [npiFirst, npiLast, npiState]);
+  }, [npiMode, npiFirst, npiLast, npiState, npiNumber]);
 
   // Live-search as the name (or state) changes — debounced so we don't hit the
   // registry on every keystroke. The Search button triggers it immediately too.
   useEffect(() => {
     if (!open || step !== "npi") return;
-    if (!npiFirst.trim() && !npiLast.trim()) {
+    const hasQuery =
+      npiMode === "number"
+        ? Boolean(npiNumber.replace(/\D/g, ""))
+        : Boolean(npiFirst.trim() || npiLast.trim());
+    if (!hasQuery) {
       setNpiResults(null);
       return;
     }
@@ -292,15 +316,28 @@ export function CreateAccountPrompt() {
       void runNpiSearch();
     }, 400);
     return () => clearTimeout(t);
-  }, [open, step, npiFirst, npiLast, npiState, runNpiSearch]);
+  }, [open, step, npiMode, npiFirst, npiLast, npiState, npiNumber, runNpiSearch]);
 
   const handleNpiSearch = (event: React.FormEvent<HTMLFormElement>) => {
     event.preventDefault();
-    if (!npiFirst.trim() && !npiLast.trim()) {
+    if (npiMode === "number") {
+      if (npiNumber.replace(/\D/g, "").length !== 10) {
+        setNpiError("Enter a valid 10-digit NPI number.");
+        return;
+      }
+    } else if (!npiFirst.trim() && !npiLast.trim()) {
       setNpiError("Enter a first or last name to search.");
       return;
     }
     void runNpiSearch();
+  };
+
+  const switchNpiMode = (mode: "name" | "number") => {
+    if (mode === npiMode) return;
+    searchSeq.current++; // discard any in-flight search from the previous mode
+    setNpiMode(mode);
+    setNpiResults(null);
+    setNpiError("");
   };
 
   const selectNpiResult = (r: NpiResult) => {
@@ -308,11 +345,28 @@ export function CreateAccountPrompt() {
     if (full) setName(titleCase(full));
     const phone = r.practiceAddress?.phone || r.mailingAddress?.phone || "";
     if (phone) setMobile(formatUsPhoneNational(phone));
+    setSelectedProvider(r);
     setRequestError("");
     setStep("request");
   };
 
   // --- Step 2: account details + OTP ----------------------------------------
+
+  // The NPI registry fields selected in step 1. Persisted with the account so
+  // the profile page can show everything captured at sign-up. Empty when the
+  // provider entered details without picking a registry match.
+  const buildProviderFields = useCallback((): Record<string, string> => {
+    if (!selectedProvider) return {};
+    const addr = selectedProvider.practiceAddress || selectedProvider.mailingAddress || {};
+    return {
+      npiNumber: selectedProvider.npi ?? "",
+      npiCredential: selectedProvider.credential ?? "",
+      specialty: selectedProvider.specialty ?? "",
+      practiceCity: addr.city ?? "",
+      practiceState: addr.state ?? "",
+      practicePostalCode: addr.postalCode ?? "",
+    };
+  }, [selectedProvider]);
 
   const handleRequestSubmit = async (event: React.FormEvent<HTMLFormElement>) => {
     event.preventDefault();
@@ -347,6 +401,7 @@ export function CreateAccountPrompt() {
         email,
         mobile: `${country.dial} ${mobile}`,
         password,
+        ...buildProviderFields(),
       });
       if (!ok) {
         setRequestError(typeof data.error === "string" ? data.error : "Sign-up failed.");
@@ -428,6 +483,7 @@ export function CreateAccountPrompt() {
         email,
         mobile: `${country.dial} ${mobile}`,
         password,
+        ...buildProviderFields(),
       });
       if (!ok) {
         setOtpError(typeof data.error === "string" ? data.error : "Could not resend code.");
@@ -503,67 +559,121 @@ export function CreateAccountPrompt() {
               information.
             </p>
 
-            <form className="access-form" noValidate onSubmit={handleNpiSearch}>
-              <div className="access-npi-names">
-                <div>
-                  <label className="field-label" htmlFor="npi-first">
-                    First Name
-                  </label>
-                  <div className="input-modern input-modern--no-icon">
-                    <input
-                      id="npi-first"
-                      type="text"
-                      autoComplete="given-name"
-                      placeholder="e.g. John"
-                      value={npiFirst}
-                      onChange={(e) => setNpiFirst(e.target.value)}
-                    />
-                  </div>
-                </div>
-                <div>
-                  <label className="field-label" htmlFor="npi-last">
-                    Last Name
-                  </label>
-                  <div className="input-modern input-modern--no-icon">
-                    <input
-                      id="npi-last"
-                      type="text"
-                      autoComplete="family-name"
-                      placeholder="e.g. Smith"
-                      value={npiLast}
-                      onChange={(e) => setNpiLast(e.target.value)}
-                    />
-                  </div>
-                </div>
-              </div>
+            <div className="access-npi-tabs" role="tablist" aria-label="NPI search mode">
+              <button
+                type="button"
+                role="tab"
+                aria-selected={npiMode === "name"}
+                className={`access-npi-tab${npiMode === "name" ? " is-active" : ""}`}
+                onClick={() => switchNpiMode("name")}
+              >
+                Search by Name
+              </button>
+              <button
+                type="button"
+                role="tab"
+                aria-selected={npiMode === "number"}
+                className={`access-npi-tab${npiMode === "number" ? " is-active" : ""}`}
+                onClick={() => switchNpiMode("number")}
+              >
+                Search by NPI Number
+              </button>
+            </div>
 
-              <div className="access-npi-search-row">
-                <div className="access-npi-state">
-                  <label className="field-label" htmlFor="npi-state">
-                    State
-                  </label>
-                  <select
-                    id="npi-state"
-                    className="access-npi-select"
-                    value={npiState}
-                    onChange={(e) => setNpiState(e.target.value)}
-                  >
-                    <option value="">All states</option>
-                    {US_STATES.map((s) => (
-                      <option key={s.code} value={s.code}>
-                        {s.name}
-                      </option>
-                    ))}
-                  </select>
+            <form className="access-form" noValidate onSubmit={handleNpiSearch}>
+              {npiMode === "name" ? (
+                <>
+                  <div className="access-npi-names">
+                    <div>
+                      <label className="field-label" htmlFor="npi-first">
+                        First Name
+                      </label>
+                      <div className="input-modern input-modern--no-icon">
+                        <input
+                          id="npi-first"
+                          type="text"
+                          autoComplete="given-name"
+                          placeholder="e.g. John"
+                          value={npiFirst}
+                          onChange={(e) => setNpiFirst(e.target.value)}
+                        />
+                      </div>
+                    </div>
+                    <div>
+                      <label className="field-label" htmlFor="npi-last">
+                        Last Name
+                      </label>
+                      <div className="input-modern input-modern--no-icon">
+                        <input
+                          id="npi-last"
+                          type="text"
+                          autoComplete="family-name"
+                          placeholder="e.g. Smith"
+                          value={npiLast}
+                          onChange={(e) => setNpiLast(e.target.value)}
+                        />
+                      </div>
+                    </div>
+                  </div>
+
+                  <div className="access-npi-search-row">
+                    <div className="access-npi-state">
+                      <label className="field-label" htmlFor="npi-state">
+                        State
+                      </label>
+                      <select
+                        id="npi-state"
+                        className="access-npi-select"
+                        value={npiState}
+                        onChange={(e) => setNpiState(e.target.value)}
+                      >
+                        <option value="">All states</option>
+                        {US_STATES.map((s) => (
+                          <option key={s.code} value={s.code}>
+                            {s.name}
+                          </option>
+                        ))}
+                      </select>
+                    </div>
+                    <button className="btn-primary access-npi-search-btn" type="submit" disabled={npiLoading}>
+                      <svg width="16" height="16" viewBox="0 0 24 24" fill="none" aria-hidden="true">
+                        <circle cx="11" cy="11" r="6.5" stroke="currentColor" strokeWidth="1.8" />
+                        <path d="M16 16L20 20" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" />
+                      </svg>
+                      {npiLoading ? "Searching…" : "Search"}
+                    </button>
+                  </div>
+                </>
+              ) : (
+                <div className="access-npi-search-row">
+                  <div className="access-npi-number">
+                    <label className="field-label" htmlFor="npi-number">
+                      NPI Number
+                    </label>
+                    <div className="input-modern input-modern--no-icon">
+                      <input
+                        id="npi-number"
+                        type="text"
+                        inputMode="numeric"
+                        autoComplete="off"
+                        placeholder="e.g. 1234567890"
+                        maxLength={10}
+                        value={npiNumber}
+                        onChange={(e) =>
+                          setNpiNumber(e.target.value.replace(/\D/g, "").slice(0, 10))
+                        }
+                      />
+                    </div>
+                  </div>
+                  <button className="btn-primary access-npi-search-btn" type="submit" disabled={npiLoading}>
+                    <svg width="16" height="16" viewBox="0 0 24 24" fill="none" aria-hidden="true">
+                      <circle cx="11" cy="11" r="6.5" stroke="currentColor" strokeWidth="1.8" />
+                      <path d="M16 16L20 20" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" />
+                    </svg>
+                    {npiLoading ? "Searching…" : "Search"}
+                  </button>
                 </div>
-                <button className="btn-primary access-npi-search-btn" type="submit" disabled={npiLoading}>
-                  <svg width="16" height="16" viewBox="0 0 24 24" fill="none" aria-hidden="true">
-                    <circle cx="11" cy="11" r="6.5" stroke="currentColor" strokeWidth="1.8" />
-                    <path d="M16 16L20 20" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" />
-                  </svg>
-                  {npiLoading ? "Searching…" : "Search"}
-                </button>
-              </div>
+              )}
 
               {npiError ? (
                 <p
@@ -637,6 +747,51 @@ export function CreateAccountPrompt() {
             aria-hidden={step !== "request"}
           >
             <StepDots current={2} />
+            {selectedProvider ? (
+              (() => {
+                const addr =
+                  selectedProvider.practiceAddress ||
+                  selectedProvider.mailingAddress ||
+                  {};
+                const city = addr.city ? titleCase(addr.city) : "";
+                const location = [
+                  [city, addr.state].filter(Boolean).join(", "),
+                  addr.postalCode,
+                ]
+                  .filter(Boolean)
+                  .join(" ");
+                return (
+                  <div className="access-provider-card">
+                    <div className="access-provider-card__info">
+                      <p className="access-provider-card__head">
+                        {selectedProvider.specialty ? (
+                          <span>{selectedProvider.specialty}</span>
+                        ) : null}
+                        {selectedProvider.specialty ? (
+                          <span className="access-provider-card__sep">·</span>
+                        ) : null}
+                        <span>
+                          NPI:{" "}
+                          <span className="access-provider-card__npi">
+                            {selectedProvider.npi}
+                          </span>
+                        </span>
+                      </p>
+                      {location ? (
+                        <p className="access-provider-card__loc">{location}</p>
+                      ) : null}
+                    </div>
+                    <button
+                      type="button"
+                      className="access-provider-card__change"
+                      onClick={() => setStep("npi")}
+                    >
+                      Change
+                    </button>
+                  </div>
+                );
+              })()
+            ) : null}
             <form
               ref={requestFormRef}
               className="access-form"
@@ -660,6 +815,23 @@ export function CreateAccountPrompt() {
                   />
                 </div>
               </div>
+              {selectedProvider ? (
+                <div>
+                  <label className="field-label" htmlFor="access-npi-number">
+                    NPI Number
+                  </label>
+                  <div className="input-modern input-modern--no-icon input-modern--readonly">
+                    <input
+                      id="access-npi-number"
+                      type="text"
+                      value={selectedProvider.npi}
+                      readOnly
+                      aria-readonly="true"
+                      tabIndex={-1}
+                    />
+                  </div>
+                </div>
+              ) : null}
               <div>
                 <label className="field-label" htmlFor="access-email">
                   Email address
@@ -787,7 +959,7 @@ export function CreateAccountPrompt() {
                     name="password"
                     type={showPassword ? "text" : "password"}
                     autoComplete="new-password"
-                    placeholder="Create a password"
+                    placeholder="Min 8 chars, upper, lower, digit, special"
                     value={password}
                     onChange={(event) => setPassword(event.target.value)}
                     required
@@ -831,25 +1003,60 @@ export function CreateAccountPrompt() {
                     )}
                   </button>
                 </div>
-                <p className="section-hint section-hint--left" style={{ margin: "4px 0 0" }}>
-                  At least 8 characters with uppercase, lowercase, number, and special character.
-                </p>
               </div>
               <div>
                 <label className="field-label" htmlFor="access-confirm-password">
-                  Confirm password
+                  Confirm Password
                 </label>
-                <div className="input-modern input-modern--no-icon">
+                <div className="input-modern input-modern--no-icon input-modern--with-toggle">
                   <input
                     id="access-confirm-password"
                     name="confirmPassword"
-                    type={showPassword ? "text" : "password"}
+                    type={showConfirmPassword ? "text" : "password"}
                     autoComplete="new-password"
                     placeholder="Re-enter your password"
                     value={confirmPassword}
                     onChange={(event) => setConfirmPassword(event.target.value)}
                     required
                   />
+                  <button
+                    type="button"
+                    className="password-toggle"
+                    aria-label={showConfirmPassword ? "Hide password" : "Show password"}
+                    aria-pressed={showConfirmPassword}
+                    onClick={() => setShowConfirmPassword((v) => !v)}
+                  >
+                    {showConfirmPassword ? (
+                      <svg width="18" height="18" viewBox="0 0 24 24" fill="none" aria-hidden="true">
+                        <path d="M3 3L21 21" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" />
+                        <path
+                          d="M10.58 10.58C10.21 10.95 10 11.46 10 12C10 13.1 10.9 14 12 14C12.54 14 13.05 13.79 13.42 13.42"
+                          stroke="currentColor"
+                          strokeWidth="1.8"
+                          strokeLinecap="round"
+                          strokeLinejoin="round"
+                        />
+                        <path
+                          d="M9.88 5.09C10.56 4.86 11.27 4.75 12 4.75C16.5 4.75 20.27 8.24 21.25 12C20.86 13.49 20.02 14.83 18.85 15.84M14.12 18.91C13.44 19.14 12.73 19.25 12 19.25C7.5 19.25 3.73 15.76 2.75 12C3.23 10.17 4.39 8.58 5.97 7.47"
+                          stroke="currentColor"
+                          strokeWidth="1.8"
+                          strokeLinecap="round"
+                          strokeLinejoin="round"
+                        />
+                      </svg>
+                    ) : (
+                      <svg width="18" height="18" viewBox="0 0 24 24" fill="none" aria-hidden="true">
+                        <path
+                          d="M2.75 12C3.73 8.24 7.5 4.75 12 4.75C16.5 4.75 20.27 8.24 21.25 12C20.27 15.76 16.5 19.25 12 19.25C7.5 19.25 3.73 15.76 2.75 12Z"
+                          stroke="currentColor"
+                          strokeWidth="1.8"
+                          strokeLinecap="round"
+                          strokeLinejoin="round"
+                        />
+                        <circle cx="12" cy="12" r="3" stroke="currentColor" strokeWidth="1.8" />
+                      </svg>
+                    )}
+                  </button>
                 </div>
               </div>
               {requestError ? (
@@ -870,7 +1077,7 @@ export function CreateAccountPrompt() {
                   Back
                 </button>
                 <button className="btn-primary" type="submit" disabled={submitting}>
-                  {submitting ? "Sending code…" : "Request Access"}
+                  {submitting ? "Sending code…" : "Verify Email & Continue"}
                 </button>
               </div>
             </form>

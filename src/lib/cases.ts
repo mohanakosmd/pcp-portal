@@ -60,6 +60,11 @@ export type CaseRootDoc = {
   sharedWithGiUserId: string | null;
   sharedWithGiUser: string | null;
   sharedWithGiAt: string | null;
+  // Set when the PCP shares the case with a Medical Assistant (MA) from the
+  // Cases page. MA staff live in the `admin_users` collection with role "ma".
+  // Once shared with MA the case is locked from further editing.
+  sharedWithMa: boolean;
+  sharedWithMaAt: string | null;
   statusUpdatedAt: string;
   createdAt: string;
   updatedAt: string;
@@ -97,9 +102,11 @@ export type CaseHealthDoc = {
   familyHistory: string | null;
   lifestyleNotes: string | null;
   primaryCarePhysician: string | null;
-  pcpPhoneFax: string | null;
+  pcpPhone: string | null;
+  pcpFax: string | null;
   pharmacyInformation: string | null;
-  pharmacyPhoneFax: string | null;
+  pharmacyPhone: string | null;
+  pharmacyFax: string | null;
   urgencyLevel: UrgencyLevel | null;
   updatedAt: string;
   updatedByUserId: string;
@@ -118,14 +125,26 @@ export type CaseAiSuggestionMedication = {
   frequency: string;
 };
 
+/** One alternative diagnosis considered, ranked most-likely first. */
+export type CaseAiSuggestionDifferential = {
+  /** Condition name, e.g. "Peptic ulcer disease". */
+  condition: string;
+  /** ICD-10-CM code for the condition, e.g. "K27.9". "" when not confident. */
+  icdCode: string;
+  /** One short line on what in the intake supports or argues against it. */
+  rationale: string;
+};
+
 /**
  * Maps 1:1 to the controls of the GI "Clinical Diagnosis & Plan" workspace so
  * the stored value can pre-populate it directly. Every value is decision support
  * for a clinician to confirm — never a prescription.
  */
 export type CaseAiSuggestions = {
-  /** "Edit Diagnosis" textarea. */
+  /** "Edit Diagnosis" textarea — working impression with its ICD-10-CM code(s). */
   diagnosis: string;
+  /** Alternative diagnoses considered, most likely first, each with an ICD-10 code. */
+  differentialDiagnosis: CaseAiSuggestionDifferential[];
   /** "Assessment & Plan Files" checkboxes — selected catalog ids. */
   files: number[];
   /** "Additional treatment notes" textarea (under the file list). */
@@ -262,6 +281,21 @@ export function parseAiSuggestions(raw: unknown): CaseAiSuggestions | null {
         ];
       })
     : [];
+  const differentialDiagnosis = Array.isArray(obj.differentialDiagnosis)
+    ? obj.differentialDiagnosis.flatMap((d) => {
+        if (!d || typeof d !== "object") return [];
+        const dx = d as Record<string, unknown>;
+        const condition = typeof dx.condition === "string" ? dx.condition : "";
+        if (!condition) return [];
+        return [
+          {
+            condition,
+            icdCode: typeof dx.icdCode === "string" ? dx.icdCode : "",
+            rationale: typeof dx.rationale === "string" ? dx.rationale : "",
+          },
+        ];
+      })
+    : [];
   const generatedAt = typeof obj.generatedAt === "string" ? obj.generatedAt : "";
   // Nothing meaningful captured → treat as no suggestions.
   if (
@@ -270,11 +304,21 @@ export function parseAiSuggestions(raw: unknown): CaseAiSuggestions | null {
     !files.length &&
     !tests.length &&
     !procedures.length &&
-    !medications.length
+    !medications.length &&
+    !differentialDiagnosis.length
   ) {
     return null;
   }
-  return { diagnosis, files, treatmentNotes, tests, procedures, medications, generatedAt };
+  return {
+    diagnosis,
+    differentialDiagnosis,
+    files,
+    treatmentNotes,
+    tests,
+    procedures,
+    medications,
+    generatedAt,
+  };
 }
 
 export function deriveCaseTitle(opts: {
@@ -340,6 +384,10 @@ export type CaseListItem = {
   submittedAtIso: string | null;
   sharedWithGiUser: string | null;
   sharedWithGiAtIso: string | null;
+  // True once the case has been shared with a Medical Assistant (MA). Drives the
+  // "Shared With MA" button state, the display status, and the edit lock.
+  sharedWithMa: boolean;
+  sharedWithMaAtIso: string | null;
   statusUpdatedAtIso: string;
   documentsCount: number;
   // True when a GI specialist has published a report for this case
@@ -384,9 +432,11 @@ export type CaseListItem = {
     familyHistory: string;
     lifestyleNotes: string;
     primaryCarePhysician: string;
-    pcpPhoneFax: string;
+    pcpPhone: string;
+    pcpFax: string;
     pharmacyInformation: string;
-    pharmacyPhoneFax: string;
+    pharmacyPhone: string;
+    pharmacyFax: string;
     urgencyLevel: UrgencyLevel | "";
   };
 };
@@ -501,6 +551,9 @@ export async function loadCasesForOwner(
 
       const about = (aboutDoc?.data ?? {}) as Partial<CaseAboutDoc>;
       const health = (healthDoc?.data ?? {}) as Partial<CaseHealthDoc>;
+      // Raw view for reading legacy fields no longer on CaseHealthDoc (the
+      // pre-split combined `pcpPhoneFax`/`pharmacyPhoneFax`).
+      const healthRaw = (healthDoc?.data ?? {}) as Record<string, unknown>;
 
       const storedStatus: CaseStatus =
         (typeof root.data.status === "string" ? (root.data.status as CaseStatus) : "draft") ||
@@ -525,9 +578,19 @@ export async function loadCasesForOwner(
         );
       }
 
+      const sharedWithMa = root.data.sharedWithMa === true;
+      const sharedWithMaAtIso =
+        typeof root.data.sharedWithMaAt === "string" ? root.data.sharedWithMaAt : null;
+
       const display = STATUS_DISPLAY[status] ?? STATUS_DISPLAY.draft;
-      const statusLabel = display.label;
-      const statusVariant = display.variant;
+      let statusLabel = display.label;
+      let statusVariant = display.variant;
+      // Once shared with MA (and before the case is completed/closed) the pill
+      // reflects that hand-off instead of the plain "Pending review".
+      if (sharedWithMa && status !== "completed" && status !== "closed") {
+        statusLabel = "Shared with MA";
+        statusVariant = "sky";
+      }
 
       const fallbackEmail =
         typeof about.email === "string" ? about.email : "";
@@ -616,6 +679,8 @@ export async function loadCasesForOwner(
         submittedAtIso,
         sharedWithGiUser,
         sharedWithGiAtIso,
+        sharedWithMa,
+        sharedWithMaAtIso,
         statusUpdatedAtIso,
         documentsCount,
         hasFinalReport,
@@ -656,11 +721,24 @@ export async function loadCasesForOwner(
           lifestyleNotes: typeof health.lifestyleNotes === "string" ? health.lifestyleNotes : "",
           primaryCarePhysician:
             typeof health.primaryCarePhysician === "string" ? health.primaryCarePhysician : "",
-          pcpPhoneFax: typeof health.pcpPhoneFax === "string" ? health.pcpPhoneFax : "",
+          // Legacy fallback: cases saved before the phone/fax split kept both in a
+          // single `pcpPhoneFax`/`pharmacyPhoneFax` string — surface that under Phone.
+          pcpPhone:
+            typeof health.pcpPhone === "string"
+              ? health.pcpPhone
+              : typeof healthRaw.pcpPhoneFax === "string"
+                ? healthRaw.pcpPhoneFax
+                : "",
+          pcpFax: typeof health.pcpFax === "string" ? health.pcpFax : "",
           pharmacyInformation:
             typeof health.pharmacyInformation === "string" ? health.pharmacyInformation : "",
-          pharmacyPhoneFax:
-            typeof health.pharmacyPhoneFax === "string" ? health.pharmacyPhoneFax : "",
+          pharmacyPhone:
+            typeof health.pharmacyPhone === "string"
+              ? health.pharmacyPhone
+              : typeof healthRaw.pharmacyPhoneFax === "string"
+                ? healthRaw.pharmacyPhoneFax
+                : "",
+          pharmacyFax: typeof health.pharmacyFax === "string" ? health.pharmacyFax : "",
           urgencyLevel: (health.urgencyLevel as UrgencyLevel) ?? "",
         },
       };

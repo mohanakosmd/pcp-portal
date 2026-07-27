@@ -19,6 +19,8 @@ export const dynamic = "force-dynamic";
 const MAX_FILE_BYTES = 5 * 1024 * 1024; // 5 MB
 
 const VALID_KINDS = new Set([
+  // The three create-case upload tiles map to: medical_record, lab, other.
+  "medical_record",
   "lab",
   "imaging",
   "note",

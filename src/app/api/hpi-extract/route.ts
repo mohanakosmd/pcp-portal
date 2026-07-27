@@ -32,10 +32,11 @@ const EXTRACTED_FIELDS = [
   "pastSurgicalHistory",
   "socialHistory",
   "pharmacyInformation",
-  "pharmacyPhoneFax",
+  "pharmacyPhone",
+  "pharmacyFax",
   "primaryCarePhysician",
-  "pcpPhoneFax",
-  "bmi",
+  "pcpPhone",
+  "pcpFax",
 ] as const;
 
 type ExtractedField = (typeof EXTRACTED_FIELDS)[number];
@@ -77,9 +78,9 @@ Field guidance:
 - pastSurgicalHistory: procedures with approximate dates, comma-separated.
 - socialHistory: tobacco, alcohol, substance use, occupation, living situation.
 - pharmacyInformation: pharmacy name and street address.
-- pharmacyPhoneFax / pcpPhoneFax: the phone and fax digits as written.
-- primaryCarePhysician: the physician's name, and clinic if stated.
-- bmi: the numeric BMI only (e.g. "24.5"). If only height and weight appear, return "" — do not calculate it.`;
+- pharmacyPhone / pharmacyFax: the pharmacy's phone number and fax number, separately. If only one is stated, fill it and leave the other "". If a number is labelled neither phone nor fax, treat it as the phone.
+- pcpPhone / pcpFax: the primary care physician's phone number and fax number, separately, following the same rule.
+- primaryCarePhysician: the physician's name, and clinic if stated.`;
 
 const PROMPT =
   "Extract the intake fields from the attached HPI document. Return an empty string for every field the document does not state.";
@@ -110,19 +111,6 @@ function clean(value: string, max: number): string {
   return trimmed.slice(0, max);
 }
 
-/**
- * Reduces whatever the document said about BMI to the bare number the form
- * accepts, or "" when it isn't a plausible one. Deliberately strict: a BMI the
- * PCP has to go and fix is worse than no BMI at all.
- */
-function normalizeBmi(value: string): string {
-  const match = value.match(/\d{1,3}(?:\.\d+)?/);
-  if (!match) return "";
-  const n = Number(match[0]);
-  if (!Number.isFinite(n) || n < 10 || n > 80) return "";
-  return match[0];
-}
-
 // Per-field caps mirror the limits the health PATCH route enforces, so an
 // extracted value can never be silently truncated on save.
 const FIELD_MAX: Record<ExtractedField, number> = {
@@ -131,10 +119,11 @@ const FIELD_MAX: Record<ExtractedField, number> = {
   pastSurgicalHistory: 1000,
   socialHistory: 1000,
   pharmacyInformation: 500,
-  pharmacyPhoneFax: 200,
+  pharmacyPhone: 40,
+  pharmacyFax: 40,
   primaryCarePhysician: 200,
-  pcpPhoneFax: 200,
-  bmi: 20,
+  pcpPhone: 40,
+  pcpFax: 40,
 };
 
 export async function POST(request: Request) {
@@ -200,10 +189,6 @@ export async function POST(request: Request) {
       fields[key] = clean(raw[key] as string, FIELD_MAX[key]);
     }
 
-    // The form (and the health PATCH route) only accept a bare number in 10–80.
-    // A document that writes "BMI 24.5 kg/m²" would otherwise land a value that
-    // fails validation and blocks the step on a field the PCP never touched.
-    fields.bmi = normalizeBmi(fields.bmi);
     // Drop empty/placeholder entries, then join — one medication per line is
     // exactly what MedicationPicker parses. Enforce the cap by dropping whole
     // trailing entries: slicing the joined string would leave a half-written

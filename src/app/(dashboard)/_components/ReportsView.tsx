@@ -6,6 +6,9 @@ import { ageFromDob } from "@/lib/age";
 import type { GiSharedReport } from "@/lib/gi-reports";
 import { usStateName } from "@/lib/us-area-codes";
 
+import { MicIcon } from "./MicIcon";
+import { useSpeechToText } from "./useSpeechToText";
+
 type ReportComment = {
   id: string;
   authorName: string;
@@ -295,11 +298,19 @@ async function downloadReportPdf(row: GiSharedReport): Promise<void> {
     },
     {
       label: "Primary Care Physician",
-      lines: [row.primaryCarePhysician || "—", row.pcpPhoneFax || ""].filter(Boolean),
+      lines: [
+        row.primaryCarePhysician || "—",
+        row.pcpPhone ? `Phone: ${row.pcpPhone}` : "",
+        row.pcpFax ? `Fax: ${row.pcpFax}` : "",
+      ].filter(Boolean),
     },
     {
       label: "Pharmacy",
-      lines: [row.pharmacyInformation || "—", row.pharmacyPhoneFax || ""].filter(Boolean),
+      lines: [
+        row.pharmacyInformation || "—",
+        row.pharmacyPhone ? `Phone: ${row.pharmacyPhone}` : "",
+        row.pharmacyFax ? `Fax: ${row.pharmacyFax}` : "",
+      ].filter(Boolean),
     },
   ]);
 
@@ -323,15 +334,13 @@ async function downloadReportPdf(row: GiSharedReport): Promise<void> {
     ],
     { cols: 4 }
   );
-  // Second demographics row. Height/Weight aren't captured by the PCP intake,
-  // so we surface BMI alongside the other contact details we do have.
+  // Second demographics row — the remaining contact details.
   drawFieldGrid(
     [
-      { label: "BMI", value: row.bmi || "—" },
       { label: "Email", value: row.email || "—" },
       { label: "State", value: row.state ? usStateName(row.state) : "—" },
     ],
-    { cols: 3 }
+    { cols: 2 }
   );
   if (row.address) {
     drawFieldGrid([{ label: "Address", value: row.address }]);
@@ -476,6 +485,24 @@ async function downloadReportPdf(row: GiSharedReport): Promise<void> {
     color: [100, 116, 139],
     gap: 8,
   });
+  // The GI specialist's e-signature image, when they have one on file. jsPDF
+  // supports PNG/JPEG data URIs; anything it can't parse (e.g. WebP) is skipped
+  // so the printed name below still stands as the signature.
+  if (row.giSpecialistSignatureUrl) {
+    try {
+      const props = doc.getImageProperties(row.giSpecialistSignatureUrl);
+      const maxW = 170;
+      const maxH = 56;
+      const scale = Math.min(maxW / props.width, maxH / props.height, 1);
+      const w = props.width * scale;
+      const h = props.height * scale;
+      ensure(h + 6);
+      doc.addImage(row.giSpecialistSignatureUrl, props.fileType, margin, y, w, h);
+      y += h + 6;
+    } catch {
+      // Unsupported image format — fall back to the name only.
+    }
+  }
   write(row.giSpecialistName || "GI Specialist", {
     bold: true,
     size: 12,
@@ -959,6 +986,37 @@ function ReportModal({
   commentError,
   giHasResponded,
 }: ReportModalProps) {
+  // Speak-to-Text for the remark box. The hook lives here rather than in the
+  // parent so closing the modal unmounts it — its cleanup aborts a live
+  // recognizer, so dictation can't keep running against a dismissed report.
+  const remarkClosed = giHasResponded || commentSubmitting;
+
+  // Finalized chunks append to whatever is already typed. `remarkRef` is
+  // updated optimistically as well as from props: two final chunks can arrive
+  // before React re-renders, and reading the stale prop would drop the first.
+  const remarkRef = useRef(remark);
+  useEffect(() => {
+    remarkRef.current = remark;
+  }, [remark]);
+
+  const speech = useSpeechToText((text) => {
+    const prev = remarkRef.current;
+    const next = prev ? `${prev.replace(/\s+$/, "")} ${text}` : text;
+    remarkRef.current = next;
+    onRemarkChange(next);
+  });
+
+  // Stop dictating once the remark can no longer be edited (submitting, or the
+  // GI has replied) — otherwise a trailing chunk lands in a box that just
+  // cleared. Read through a ref so `toggle` isn't a dependency.
+  const speechRef = useRef(speech);
+  useEffect(() => {
+    speechRef.current = speech;
+  });
+  useEffect(() => {
+    if (remarkClosed && speechRef.current.listening) void speechRef.current.toggle();
+  }, [remarkClosed]);
+
   return (
     <div className="reports-modal">
       <div className="reports-modal__backdrop" onClick={onClose} />
@@ -1037,6 +1095,24 @@ function ReportModal({
             onChange={(e) => onRemarkChange(e.target.value)}
             disabled={commentSubmitting || giHasResponded}
           />
+          <div className="cc-speech-action-row" style={{ marginTop: 8 }}>
+            <button
+              type="button"
+              className={`cc-speech-btn${speech.listening ? " cc-speech-btn--listening" : ""}`}
+              aria-label={speech.listening ? "Stop dictating remark" : "Dictate remark"}
+              aria-pressed={speech.listening}
+              title={speech.listening ? "Stop recording" : "Speak-to-Text"}
+              onClick={() => void speech.toggle()}
+              disabled={!speech.supported || remarkClosed}
+            >
+              <MicIcon />
+            </button>
+          </div>
+          {!giHasResponded ? (
+            <p className="cc-field-hint" aria-live="polite" style={{ marginTop: 4 }}>
+              {speech.status}
+            </p>
+          ) : null}
           {commentError ? (
             <p className="reports-remark-error">{commentError}</p>
           ) : null}
@@ -1143,14 +1219,16 @@ function FinalReportBody({ row }: { row: GiSharedReport }) {
         <div className="rr-card">
           <span className="rr-card__label">Primary Care Physician</span>
           <strong className="rr-card__name">{row.primaryCarePhysician || "—"}</strong>
-          {row.pcpPhoneFax ? <span className="rr-card__line">{row.pcpPhoneFax}</span> : null}
+          {row.pcpPhone ? <span className="rr-card__line">Phone: {row.pcpPhone}</span> : null}
+          {row.pcpFax ? <span className="rr-card__line">Fax: {row.pcpFax}</span> : null}
         </div>
         <div className="rr-card">
           <span className="rr-card__label">Pharmacy</span>
           <strong className="rr-card__name">{row.pharmacyInformation || "—"}</strong>
-          {row.pharmacyPhoneFax ? (
-            <span className="rr-card__line">{row.pharmacyPhoneFax}</span>
+          {row.pharmacyPhone ? (
+            <span className="rr-card__line">Phone: {row.pharmacyPhone}</span>
           ) : null}
+          {row.pharmacyFax ? <span className="rr-card__line">Fax: {row.pharmacyFax}</span> : null}
         </div>
       </div>
 
@@ -1168,9 +1246,8 @@ function FinalReportBody({ row }: { row: GiSharedReport }) {
         ]}
       />
       <DetailGrid
-        cols={3}
+        cols={2}
         cells={[
-          { label: "BMI", value: row.bmi || "—" },
           { label: "Email", value: row.email || "—" },
           { label: "State", value: row.state ? usStateName(row.state) : "—" },
         ]}
@@ -1350,6 +1427,14 @@ function FinalReportBody({ row }: { row: GiSharedReport }) {
       {/* Signature */}
       <div className="rr-sign">
         <p className="rr-sign__eyebrow">Electronically Reviewed &amp; Signed</p>
+        {row.giSpecialistSignatureUrl ? (
+          // eslint-disable-next-line @next/next/no-img-element
+          <img
+            className="rr-sign__image"
+            src={row.giSpecialistSignatureUrl}
+            alt={`Signature of ${row.giSpecialistName || "GI Specialist"}`}
+          />
+        ) : null}
         <strong className="rr-sign__name">{row.giSpecialistName || "GI Specialist"}</strong>
         <p className="rr-sign__date">Date: {formatDate(row.sharedAt)}</p>
       </div>

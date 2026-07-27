@@ -37,6 +37,8 @@ export async function POST() {
     sharedWithGiUserId: null,
     sharedWithGiUser: null,
     sharedWithGiAt: null,
+    sharedWithMa: false,
+    sharedWithMaAt: null,
     statusUpdatedAt: now,
     createdAt: now,
     updatedAt: now,

@@ -10,8 +10,8 @@ import type { CaseListItem, CaseListPillVariant } from "@/lib/cases";
 import { HPI_FIELDS, HpiExtractPanel, type HpiField } from "./HpiExtractPanel";
 import { LocalTime } from "./LocalTime";
 import { MedicationPicker } from "./MedicationPicker";
+import { MicIcon } from "./MicIcon";
 import { useSpeechToText } from "./useSpeechToText";
-import type { GiUser } from "@/lib/gi-users";
 import { formatUsPhone, isValidUsPhone } from "@/lib/phone";
 
 const STORAGE_KEY = "pcp-cases-saved-collapsed";
@@ -27,22 +27,6 @@ type ModalDictationField =
   | "pastSurgicalHistory"
   | "socialHistory"
   | "pharmacyInformation";
-
-function MicIcon() {
-  return (
-    <svg width="22" height="22" viewBox="0 0 24 24" fill="none" aria-hidden="true">
-      <rect x="9" y="4" width="6" height="10" rx="3" stroke="currentColor" strokeWidth="1.9" />
-      <path
-        d="M6.5 11.5V12a5.5 5.5 0 0011 0v-.5"
-        stroke="currentColor"
-        strokeWidth="1.9"
-        strokeLinecap="round"
-      />
-      <path d="M12 17.5V21" stroke="currentColor" strokeWidth="1.9" strokeLinecap="round" />
-      <path d="M9 21h6" stroke="currentColor" strokeWidth="1.9" strokeLinecap="round" />
-    </svg>
-  );
-}
 
 type InsuranceImagePreview = {
   src: string;
@@ -74,21 +58,15 @@ export function CasesView({
   const [selectedId, setSelectedId] = useState<string>(cases[0]?.id ?? "");
   const [filterText, setFilterText] = useState<string>(initialFilter?.trim() ?? "");
   const [savedCollapsed, setSavedCollapsed] = useState(false);
-  const [shareOpen, setShareOpen] = useState(false);
-  const [shareSelected, setShareSelected] = useState<string>("");
-  const [shareError, setShareError] = useState(false);
-  const [shareSubmitting, setShareSubmitting] = useState(false);
-  const [shareErrorMessage, setShareErrorMessage] = useState<string>("");
-  // Transient toast (e.g. "already shared with GI").
+  // Set while the "Share With MA" request is in flight, to disable the button.
+  const [maSharing, setMaSharing] = useState(false);
+  // Transient toast (e.g. "already shared with MA").
   const [toast, setToast] = useState<{
     message: string;
     state: "show" | "leave" | "hidden";
   }>({ message: "", state: "hidden" });
   const toastHideTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
   const toastResetTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
-  const [giUsers, setGiUsers] = useState<GiUser[]>([]);
-  const [giUsersLoading, setGiUsersLoading] = useState(false);
-  const [giUsersError, setGiUsersError] = useState<string>("");
   const [reportOpen, setReportOpen] = useState(false);
   const [imagePreview, setImagePreview] = useState<InsuranceImagePreview>(null);
   const [reportDocs, setReportDocs] = useState<CaseDocument[]>([]);
@@ -106,12 +84,11 @@ export function CasesView({
   }, []);
 
   useEffect(() => {
-    const anyModalOpen = shareOpen || reportOpen;
-    document.body.classList.toggle("cases-share-modal-open", anyModalOpen);
+    document.body.classList.toggle("cases-share-modal-open", reportOpen);
     return () => {
       document.body.classList.remove("cases-share-modal-open");
     };
-  }, [shareOpen, reportOpen]);
+  }, [reportOpen]);
 
   useEffect(() => {
     const onKey = (event: KeyboardEvent) => {
@@ -122,15 +99,11 @@ export function CasesView({
       }
       if (reportOpen) {
         setReportOpen(false);
-        return;
-      }
-      if (shareOpen) {
-        setShareOpen(false);
       }
     };
     document.addEventListener("keydown", onKey);
     return () => document.removeEventListener("keydown", onKey);
-  }, [imagePreview, reportOpen, shareOpen]);
+  }, [imagePreview, reportOpen]);
 
   const toggleSaved = () => {
     const next = !savedCollapsed;
@@ -234,107 +207,45 @@ export function CasesView({
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [focusId, initialFilter]);
 
-  const openShare = () => {
-    setShareSelected("");
-    setShareError(false);
-    setShareErrorMessage("");
-    setShareOpen(true);
-  };
-
-  // The share button stays clickable so we can explain why sharing is/ isn't
-  // available instead of silently doing nothing on a disabled button.
-  const handleShareClick = () => {
-    if (!selectedCase) return;
-    if (selectedCase.rawStatus === "draft") {
-      showToast("Submit this case first — drafts can't be shared with a GI specialist.");
-      return;
-    }
-    if (selectedCase.rawStatus !== "submitted") {
-      const who = selectedCase.sharedWithGiUser;
-      const when = formatDateTime(selectedCase.sharedWithGiAtIso);
+  // "Share With MA" is a single-click action (no specialist picker): it marks
+  // the case as shared with a Medical Assistant and locks it from editing. The
+  // button stays clickable after sharing so we can explain, via a toast, why
+  // nothing happens instead of silently doing nothing on a disabled button.
+  const handleShareClick = async () => {
+    if (!selectedCase || maSharing) return;
+    if (selectedCase.sharedWithMa) {
+      const when = formatDateTime(selectedCase.sharedWithMaAtIso);
       showToast(
-        who
-          ? `This case has already been shared with ${who}${when ? ` on ${when}` : ""}.`
-          : "This case has already been shared with a GI specialist."
+        when
+          ? `This case has already been shared with MA on ${when}.`
+          : "This case has already been shared with MA."
       );
       return;
     }
-    openShare();
-  };
-
-  // Lazy-load GI users the first time the share modal is opened. Refetches
-  // on each open so freshly-seeded users show up without a page reload.
-  useEffect(() => {
-    if (!shareOpen) return;
-    let cancelled = false;
-    setGiUsersLoading(true);
-    setGiUsersError("");
-    fetch("/api/gi-users")
-      .then(async (r) => {
-        const data = (await r.json().catch(() => ({}))) as {
-          giUsers?: GiUser[];
-          error?: string;
-        };
-        if (!r.ok) throw new Error(data.error || `Failed (${r.status})`);
-        return Array.isArray(data.giUsers) ? data.giUsers : [];
-      })
-      .then((list) => {
-        if (cancelled) return;
-        setGiUsers(list);
-      })
-      .catch((err: unknown) => {
-        if (cancelled) return;
-        setGiUsersError(
-          err instanceof Error ? err.message : "Could not load GI specialists."
-        );
-        setGiUsers([]);
-      })
-      .finally(() => {
-        if (!cancelled) setGiUsersLoading(false);
-      });
-    return () => {
-      cancelled = true;
-    };
-  }, [shareOpen]);
-
-  const submitShare = async (event: React.FormEvent<HTMLFormElement>) => {
-    event.preventDefault();
-    if (!selectedCase) return;
-    if (!shareSelected) {
-      setShareError(true);
+    if (selectedCase.rawStatus === "draft") {
+      showToast("Submit this case first — drafts can't be shared with MA.");
       return;
     }
     if (selectedCase.rawStatus !== "submitted") {
-      setShareErrorMessage(
-        selectedCase.rawStatus === "draft"
-          ? "Submit the case before sharing with a GI specialist."
-          : "This case has already been shared."
-      );
+      showToast(`This case has already been shared (${selectedCase.status}).`);
       return;
     }
-    setShareSubmitting(true);
-    setShareErrorMessage("");
+
+    setMaSharing(true);
     try {
-      const response = await fetch(`/api/cases/${selectedCase.id}/share`, {
+      const response = await fetch(`/api/cases/${selectedCase.id}/share-ma`, {
         method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ giUserId: shareSelected }),
       });
       const data = (await response.json().catch(() => ({}))) as { error?: string };
       if (!response.ok) {
         throw new Error(data.error || `Share failed (${response.status}).`);
       }
-      const giName =
-        giUsers.find((g) => g.id === shareSelected)?.displayName ?? "the GI specialist";
-      setShareOpen(false);
       router.refresh();
-      showToast(`Case shared with ${giName}.`);
+      showToast("Case shared with MA.");
     } catch (err) {
-      setShareErrorMessage(
-        err instanceof Error ? err.message : "Could not share the case."
-      );
+      showToast(err instanceof Error ? err.message : "Could not share the case with MA.");
     } finally {
-      setShareSubmitting(false);
+      setMaSharing(false);
     }
   };
 
@@ -346,7 +257,7 @@ export function CasesView({
     <main className="dash-main cases-main" id="main">
       <div className="dash-page-head">
         <h1>Cases</h1>
-        <p className="cases-page-lede">Select a case and share with GI Specialist</p>
+        <p className="cases-page-lede">Select a case and share with MA</p>
       </div>
 
       {normalizedFilter ? (
@@ -459,18 +370,20 @@ export function CasesView({
                   type="button"
                   className="cases-btn cases-btn--outline"
                   onClick={handleShareClick}
-                  disabled={selectedCase.rawStatus === "draft"}
+                  disabled={selectedCase.rawStatus === "draft" || maSharing}
                   title={
                     selectedCase.rawStatus === "draft"
                       ? "Submit the case to enable sharing."
-                      : selectedCase.rawStatus === "submitted"
-                        ? undefined
-                        : `Already shared (${selectedCase.status}).`
+                      : selectedCase.sharedWithMa
+                        ? "This case has already been shared with MA."
+                        : undefined
                   }
                 >
-                  {selectedCase.rawStatus === "submitted" || selectedCase.rawStatus === "draft"
-                    ? "Share With GI"
-                    : "Shared With GI"}
+                  {maSharing
+                    ? "Sharing…"
+                    : selectedCase.sharedWithMa
+                      ? "Shared With MA"
+                      : "Share With MA"}
                 </button>
               </div>
 
@@ -496,23 +409,6 @@ export function CasesView({
           </div>
         )}
       </section>
-
-      <ShareGiModal
-        open={shareOpen}
-        onClose={() => setShareOpen(false)}
-        onSubmit={submitShare}
-        selected={shareSelected}
-        onSelectedChange={(value) => {
-          setShareSelected(value);
-          setShareError(false);
-        }}
-        error={shareError}
-        submitting={shareSubmitting}
-        errorMessage={shareErrorMessage}
-        giUsers={giUsers}
-        loading={giUsersLoading}
-        loadError={giUsersError}
-      />
 
       {selectedCase ? (
         <ReportModal
@@ -702,13 +598,22 @@ function buildTimelineSteps(record: CaseListItem): TimelineStep[] {
     : sharedDate
       ? `Shared ${sharedDate}`
       : null;
+  const sharedMaDate = formatDateTime(record.sharedWithMaAtIso);
   if (status === "draft") {
     steps.push({ title: "GI Specialist Reviewing", state: "pending" });
+  } else if (status === "submitted" && record.sharedWithMa) {
+    // Shared with a Medical Assistant from the Cases page (not the GI flow).
+    steps.push({
+      title: "Shared with MA",
+      state: "current",
+      meta: sharedMaDate ? `Shared ${sharedMaDate}` : "Shared with Medical Assistant",
+      badge: "With MA",
+    });
   } else if (status === "submitted") {
     steps.push({
       title: "GI Specialist Reviewing",
       state: "pending",
-      meta: "Not yet shared with GI specialist",
+      meta: "Not yet shared",
     });
   } else if (status === "under_review") {
     // An open case with a published report has finished the review even though
@@ -796,115 +701,6 @@ function Timeline({ record }: { record: CaseListItem }) {
   );
 }
 
-function ShareGiModal({
-  open,
-  onClose,
-  onSubmit,
-  selected,
-  onSelectedChange,
-  error,
-  submitting,
-  errorMessage,
-  giUsers,
-  loading,
-  loadError,
-}: {
-  open: boolean;
-  onClose: () => void;
-  onSubmit: (event: React.FormEvent<HTMLFormElement>) => void;
-  selected: string;
-  onSelectedChange: (value: string) => void;
-  error: boolean;
-  submitting: boolean;
-  errorMessage: string;
-  giUsers: GiUser[];
-  loading: boolean;
-  loadError: string;
-}) {
-  return (
-    <div className="cases-share-modal" hidden={!open}>
-      <div className="cases-share-modal__backdrop" onClick={onClose} />
-      <div
-        className="cases-share-modal__dialog"
-        role="dialog"
-        aria-modal="true"
-        aria-labelledby="share-gi-title"
-      >
-        <div className="cases-share-modal__head">
-          <h3 id="share-gi-title">Share case with GI users</h3>
-          <button
-            type="button"
-            className="cases-share-modal__close"
-            aria-label="Close GI share modal"
-            onClick={onClose}
-          >
-            <span aria-hidden="true">×</span>
-          </button>
-        </div>
-        <form onSubmit={onSubmit}>
-          <p className="cases-share-modal__helper">
-            Select one GI user to share this case.
-          </p>
-          <div
-            className="cases-share-modal__list"
-            role="radiogroup"
-            aria-label="GI users"
-          >
-            {loading ? (
-              <p className="cases-share-modal__helper">Loading GI specialists…</p>
-            ) : giUsers.length === 0 ? (
-              <p className="cases-share-modal__helper">
-                No GI specialists are configured yet.
-              </p>
-            ) : (
-              giUsers.map((doctor) => (
-                <label key={doctor.id} className="cases-share-modal__item">
-                  <input
-                    type="radio"
-                    name="giUser"
-                    value={doctor.id}
-                    checked={selected === doctor.id}
-                    onChange={() => onSelectedChange(doctor.id)}
-                  />
-                  <span>{doctor.displayName}</span>
-                </label>
-              ))
-            )}
-          </div>
-          {error ? (
-            <p className="cases-share-modal__error">
-              Please select at least one GI user.
-            </p>
-          ) : null}
-          {loadError ? (
-            <p className="cases-share-modal__error">{loadError}</p>
-          ) : null}
-          {errorMessage ? (
-            <p className="cases-share-modal__error">{errorMessage}</p>
-          ) : null}
-          <div className="cases-share-modal__actions">
-            <button
-              type="button"
-              className="cases-btn cases-btn--muted"
-              onClick={onClose}
-              disabled={submitting}
-            >
-              Cancel
-            </button>
-            <button
-              type="submit"
-              className="cases-btn cases-btn--outline"
-              disabled={submitting}
-            >
-              {submitting ? "Sharing…" : "Submit"}
-            </button>
-          </div>
-        </form>
-      </div>
-    </div>
-  );
-}
-
 type ReportModalProps = {
   open: boolean;
   record: CaseListItem;
@@ -918,7 +714,8 @@ type ReportModalProps = {
 };
 
 const DOC_KIND_LABEL: Record<string, string> = {
-  lab: "Lab report",
+  medical_record: "Medical Records",
+  lab: "Lab Investigations",
   imaging: "Imaging",
   note: "Note",
   insurance_card_front: "Insurance card (front)",
@@ -988,9 +785,10 @@ function ReportModal({
   const [busyDoc, setBusyDoc] = useState(false);
   const addDocsRef = useRef<HTMLInputElement | null>(null);
 
-  // Editing stays available until the GI specialist shares a report back (their
-  // sign-off); after that the case is locked.
-  const canEdit = !record.hasFinalReport;
+  // Editing stays available until the case is handed off: either shared with MA
+  // (from the Cases page) or after the GI specialist shares a report back (their
+  // sign-off). After either, the case is locked.
+  const canEdit = !record.hasFinalReport && !record.sharedWithMa;
 
   // Leave edit mode when the modal closes or a different case is opened.
   // (form/healthForm are (re)seeded from the record in startEdit, like `form`.)
@@ -1054,7 +852,7 @@ function ReportModal({
 
   // Speak-to-Text across every free-text Health field. One recognizer, routed to
   // whichever field's mic is active (dictationFieldRef), matching create-case.
-  // Digit/number fields (BMI, phone/fax) are excluded — dictation garbles them.
+  // Digit/number fields (phone/fax) are excluded — dictation garbles them.
   const [dictationField, setDictationField] = useState<ModalDictationField | null>(null);
   const dictationFieldRef = useRef<ModalDictationField | null>(null);
   const speech = useSpeechToText((finalized) => {
@@ -1164,6 +962,15 @@ function ReportModal({
     if (!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(form.email)) {
       return "Enter a valid email address.";
     }
+    const phoneChecks: [string, string][] = [
+      [healthForm.pcpPhone, "Enter a valid PCP phone number."],
+      [healthForm.pcpFax, "Enter a valid PCP fax number."],
+      [healthForm.pharmacyPhone, "Enter a valid pharmacy phone number."],
+      [healthForm.pharmacyFax, "Enter a valid pharmacy fax number."],
+    ];
+    for (const [value, message] of phoneChecks) {
+      if (value.trim() && !isValidUsPhone(value)) return message;
+    }
     const MAX = 5 * 1024 * 1024;
     if (insuranceFiles.front && insuranceFiles.front.size > MAX) {
       return "Insurance front image exceeds the 5 MB limit.";
@@ -1235,7 +1042,6 @@ function ReportModal({
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
           inboxMessage: healthForm.inboxMessage,
-          bmi: healthForm.bmi,
           allergies: healthForm.allergies,
           currentMedications: healthForm.currentMedications,
           existingConditions: healthForm.existingConditions,
@@ -1245,9 +1051,11 @@ function ReportModal({
           familyHistory: healthForm.familyHistory,
           lifestyleNotes: healthForm.lifestyleNotes,
           primaryCarePhysician: healthForm.primaryCarePhysician,
-          pcpPhoneFax: healthForm.pcpPhoneFax,
+          pcpPhone: healthForm.pcpPhone,
+          pcpFax: healthForm.pcpFax,
           pharmacyInformation: healthForm.pharmacyInformation,
-          pharmacyPhoneFax: healthForm.pharmacyPhoneFax,
+          pharmacyPhone: healthForm.pharmacyPhone,
+          pharmacyFax: healthForm.pharmacyFax,
           urgencyLevel: healthForm.urgencyLevel || undefined,
         }),
       });
@@ -1634,10 +1442,6 @@ function ReportModal({
               />
             ) : null}
 
-            {renderHealthField("BMI", "bmi", {
-              fallback: "No BMI recorded.",
-              placeholder: "e.g. 24.5",
-            })}
             {renderHealthField("Allergies", "allergies", {
               multiline: true,
               fallback: "No allergies reported.",
@@ -1656,16 +1460,22 @@ function ReportModal({
             {renderHealthField("Primary Care Physician (PCP)", "primaryCarePhysician", {
               fallback: "No primary care physician provided.",
             })}
-            {renderHealthField("PCP phone & fax", "pcpPhoneFax", {
-              fallback: "No PCP phone/fax provided.",
+            {renderHealthField("PCP Phone", "pcpPhone", {
+              fallback: "No PCP phone provided.",
+            })}
+            {renderHealthField("PCP Fax", "pcpFax", {
+              fallback: "No PCP fax provided.",
             })}
             {renderHealthField("Pharmacy information", "pharmacyInformation", {
               multiline: true,
               fallback: "No pharmacy information provided.",
               dictate: "pharmacyInformation",
             })}
-            {renderHealthField("Pharmacy phone & fax", "pharmacyPhoneFax", {
-              fallback: "No pharmacy phone/fax provided.",
+            {renderHealthField("Pharmacy Phone", "pharmacyPhone", {
+              fallback: "No pharmacy phone provided.",
+            })}
+            {renderHealthField("Pharmacy Fax", "pharmacyFax", {
+              fallback: "No pharmacy fax provided.",
             })}
 
             <div>
@@ -1805,8 +1615,15 @@ function ReportModal({
                   Edit
                 </button>
               ) : (
-                <span className="cases-report-locked" title="The GI specialist has shared a report — this case is locked.">
-                  🔒 Locked after GI report
+                <span
+                  className="cases-report-locked"
+                  title={
+                    record.sharedWithMa
+                      ? "This case has been shared with MA — it is locked from editing."
+                      : "The GI specialist has shared a report — this case is locked."
+                  }
+                >
+                  {record.sharedWithMa ? "🔒 Locked after MA share" : "🔒 Locked after GI report"}
                 </span>
               )}
               <button

@@ -778,6 +778,15 @@
   color: #64748b;
 }
 
+.rr-sign__image {
+  display: block;
+  height: auto;
+  max-height: 64px;
+  max-width: 240px;
+  object-fit: contain;
+  margin: 4px 0 2px;
+}
+
 .rr-sign__name {
   font-size: 15px;
   color: #0f172a;

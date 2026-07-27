@@ -126,7 +126,13 @@ export async function PATCH(
   }
 
   try {
-    await readCaseOwnedBy(caseId, userId);
+    const root = await readCaseOwnedBy(caseId, userId);
+    if (root.sharedWithMa === true) {
+      return NextResponse.json(
+        { error: "This case has been shared with MA and can no longer be edited." },
+        { status: 409 }
+      );
+    }
 
     const existing = await getDocument(`${PCP_CASES_COLLECTION}/${caseId}/about`, "data");
     const prev = (existing?.data ?? {}) as Partial<CaseAboutDoc>;

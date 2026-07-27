@@ -15,6 +15,7 @@ import {
   ageFromDob,
   readCaseOwnedBy,
   type CaseAboutDoc,
+  type CaseAiSuggestionDifferential,
   type CaseAiSuggestionMedication,
   type CaseAiSuggestions,
   type CaseHealthDoc,
@@ -32,6 +33,8 @@ const MAX_DIAGNOSIS_CHARS = 1200;
 const MAX_TREATMENT_NOTES_CHARS = 1200;
 const MAX_MEDICATIONS = 12;
 const MAX_MED_FIELD_CHARS = 200;
+const MAX_DIFFERENTIALS = 6;
+const MAX_DIFFERENTIAL_FIELD_CHARS = 200;
 const MAX_PLAN_FILES = 16;
 
 const SYSTEM_INSTRUCTION = `You are a clinical-summary assistant for a PCP (primary-care physician) intake portal. Your audience is a clinician reviewing the patient's intake. Write a concise, factual, clinically useful summary based ONLY on the structured data the user supplies — never invent diagnoses, lab values, or details not present in the input.
@@ -83,7 +86,6 @@ function buildIntakeBlock(opts: Intake): string {
     field("Recent tests or procedures", health.recentTestsOrProcedures),
     field("Family history", health.familyHistory),
     field("Lifestyle notes", health.lifestyleNotes),
-    field("BMI", health.bmi),
     field("Patient-indicated urgency", health.urgencyLevel),
   ].filter((v): v is string => Boolean(v));
 
@@ -112,7 +114,8 @@ const SUGGESTIONS_SYSTEM_INSTRUCTION = `You are a GI (gastroenterology) triage a
 Base everything ONLY on the supplied intake. Do not invent findings. Be conservative: when the intake is thin, suggest less rather than guessing — an empty array or "" is the correct answer when nothing clearly applies.
 
 Return, as JSON, matching the GI plan form:
-- diagnosis: a brief working clinical impression, at most 80 words. If the picture is too vague to impress, say so plainly.
+- diagnosis: a brief working clinical impression, at most 80 words, ending with its ICD-10-CM code in parentheses — e.g. "Gastroesophageal reflux disease without esophagitis (ICD-10: K21.9)". Use the most specific code the intake actually supports; when the picture only supports a symptom code, give the symptom code (e.g. R10.13) rather than inventing a disease. If the picture is too vague to impress, say so plainly and omit the code.
+- differentialDiagnosis: the alternative diagnoses a specialist should still consider, ordered most likely first, at most 5. Each is an object { condition, icdCode, rationale }. condition = the alternative diagnosis name; icdCode = its ICD-10-CM code (e.g. "K27.9") — "" if you are not confident of the code, never guess a code you don't know; rationale = one short line (≤ 20 words) on what in the intake supports or argues against it. Exclude the working impression itself. Empty array when the intake is too thin to differentiate.
 - files: from the "Assessment & Plan File catalog" in the prompt, the NUMERIC ids of the documents/orders that fit this case. CHOOSE ONLY ids listed there. Prefer a focused set.
 - treatmentNotes: a short free-text plan for the specialist (e.g. empiric therapy, follow-up interval, counseling), at most 60 words. "" if nothing to add.
 - tests: from the "Recommend Tests catalog" in the prompt, the string ids of applicable labs. CHOOSE ONLY ids listed there.
@@ -128,6 +131,18 @@ const SUGGESTIONS_RESPONSE_SCHEMA: Record<string, unknown> = {
   type: "OBJECT",
   properties: {
     diagnosis: { type: "STRING" },
+    differentialDiagnosis: {
+      type: "ARRAY",
+      items: {
+        type: "OBJECT",
+        properties: {
+          condition: { type: "STRING" },
+          icdCode: { type: "STRING" },
+          rationale: { type: "STRING" },
+        },
+        required: ["condition", "icdCode", "rationale"],
+      },
+    },
     files: { type: "ARRAY", items: { type: "INTEGER" } },
     treatmentNotes: { type: "STRING" },
     tests: { type: "ARRAY", items: { type: "STRING" } },
@@ -145,7 +160,15 @@ const SUGGESTIONS_RESPONSE_SCHEMA: Record<string, unknown> = {
       },
     },
   },
-  required: ["diagnosis", "files", "treatmentNotes", "tests", "procedures", "medications"],
+  required: [
+    "diagnosis",
+    "differentialDiagnosis",
+    "files",
+    "treatmentNotes",
+    "tests",
+    "procedures",
+    "medications",
+  ],
 };
 
 function buildSuggestionsPrompt(opts: Intake): string {
@@ -167,6 +190,7 @@ function buildSuggestionsPrompt(opts: Intake): string {
 
 type RawSuggestions = {
   diagnosis?: unknown;
+  differentialDiagnosis?: unknown;
   files?: unknown;
   treatmentNotes?: unknown;
   tests?: unknown;
@@ -204,6 +228,41 @@ function normalizeSlugs(raw: unknown, resolve: (v: string) => string | null): st
   return out;
 }
 
+/**
+ * Keeps differential rows that name a condition, deduped by condition, capped.
+ * An ICD code that doesn't look like ICD-10-CM (letter + 2 digits, optional
+ * dotted suffix) is dropped rather than shown — a malformed code is worse than
+ * none on a clinician's form.
+ */
+function normalizeDifferentials(raw: unknown): CaseAiSuggestionDifferential[] {
+  if (!Array.isArray(raw)) return [];
+  const seen = new Set<string>();
+  const out: CaseAiSuggestionDifferential[] = [];
+  for (const d of raw) {
+    if (!d || typeof d !== "object") continue;
+    const dx = d as Record<string, unknown>;
+    const condition =
+      typeof dx.condition === "string"
+        ? dx.condition.trim().slice(0, MAX_DIFFERENTIAL_FIELD_CHARS)
+        : "";
+    if (!condition) continue; // a row with no condition is meaningless
+    const key = condition.toLowerCase();
+    if (seen.has(key)) continue;
+    seen.add(key);
+    const rawCode = typeof dx.icdCode === "string" ? dx.icdCode.trim().toUpperCase() : "";
+    out.push({
+      condition,
+      icdCode: /^[A-TV-Z][0-9][0-9AB](\.[0-9A-Z]{1,4})?$/.test(rawCode) ? rawCode : "",
+      rationale:
+        typeof dx.rationale === "string"
+          ? dx.rationale.trim().slice(0, MAX_DIFFERENTIAL_FIELD_CHARS)
+          : "",
+    });
+    if (out.length >= MAX_DIFFERENTIALS) break;
+  }
+  return out;
+}
+
 function normalizeMedications(raw: unknown): CaseAiSuggestionMedication[] {
   if (!Array.isArray(raw)) return [];
   const out: CaseAiSuggestionMedication[] = [];
@@ -235,6 +294,7 @@ function normalizeSuggestions(raw: RawSuggestions): CaseAiSuggestions {
   return {
     diagnosis:
       typeof raw.diagnosis === "string" ? raw.diagnosis.trim().slice(0, MAX_DIAGNOSIS_CHARS) : "",
+    differentialDiagnosis: normalizeDifferentials(raw.differentialDiagnosis),
     files: normalizeFileIds(raw.files),
     treatmentNotes:
       typeof raw.treatmentNotes === "string"
@@ -259,15 +319,16 @@ async function generateSuggestions(intake: Intake): Promise<CaseAiSuggestions | 
       responseSchema: SUGGESTIONS_RESPONSE_SCHEMA,
       temperature: 0.2,
       // A truncated response is unparseable JSON, so generateJson throws and the
-      // whole set is lost. This shape (diagnosis + notes + several medication
-      // objects) can run long, so give it generous headroom; the prompt also
-      // caps medication count/verbosity to keep it well under this.
-      maxOutputTokens: 4096,
+      // whole set is lost. This shape (diagnosis + differential + notes +
+      // several medication objects) can run long, so give it generous headroom;
+      // the prompt also caps list length/verbosity to keep it well under this.
+      maxOutputTokens: 6144,
       timeoutMs: 60_000,
     });
     const s = normalizeSuggestions(raw);
     const empty =
       !s.diagnosis &&
+      !s.differentialDiagnosis.length &&
       !s.treatmentNotes &&
       !s.files.length &&
       !s.tests.length &&
