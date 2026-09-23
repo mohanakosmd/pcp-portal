@@ -49,6 +49,9 @@ env:
   - variable: SENDGRID_SENDER_EMAIL
     value: admin@aigicare.com
     availability: [RUNTIME]
+  - variable: GEMINI_MODEL
+    value: gemini-2.0-flash
+    availability: [RUNTIME]
 
   # --- Secrets (Cloud Secret Manager; set via `firebase apphosting:secrets:set`) ---
   - variable: PCP_SESSION_SECRET
