@@ -50,7 +50,7 @@ env:
     value: admin@aigicare.com
     availability: [RUNTIME]
   - variable: GEMINI_MODEL
-    value: gemini-2.0-flash
+    value: gemini-3.6-flash
     availability: [RUNTIME]
 
   # --- Secrets (Cloud Secret Manager; set via `firebase apphosting:secrets:set`) ---
