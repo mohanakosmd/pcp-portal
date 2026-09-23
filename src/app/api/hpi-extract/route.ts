@@ -146,7 +146,7 @@ export async function POST(request: Request) {
   }
   if (file.size > MAX_FILE_BYTES) {
     return NextResponse.json(
-      { error: "The HPI document exceeds the 5 MB limit." },
+      { error: "The consultation document exceeds the 5 MB limit." },
       { status: 413 }
     );
   }
@@ -155,7 +155,7 @@ export async function POST(request: Request) {
   if (!ACCEPTED_TYPES.has(contentType)) {
     return NextResponse.json(
       {
-        error: `Can't read "${file.name}". Upload the HPI document as a ${[
+        error: `Can't read "${file.name}". Upload the consultation document as a ${[
           ...ACCEPTED_TYPES.values(),
         ].join(", ")} file.`,
       },
@@ -168,7 +168,7 @@ export async function POST(request: Request) {
     const raw = await generateJson<unknown>(PROMPT, {
       systemInstruction: SYSTEM_INSTRUCTION,
       responseSchema: RESPONSE_SCHEMA,
-      file: { mimeType: contentType, dataBase64: bytes.toString("base64") },
+      files: [{ mimeType: contentType, dataBase64: bytes.toString("base64") }],
       // Extraction is transcription, not composition — keep it as literal as
       // the decoder allows.
       temperature: 0,

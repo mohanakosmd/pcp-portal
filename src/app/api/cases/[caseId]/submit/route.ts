@@ -51,6 +51,9 @@ export async function POST(
       ownerUserId: userId,
     }).catch((err) => console.error("[cases submit] emitCaseSubmitted failed:", err));
 
+    // MA staff are notified on share, not on submit — submitting only unlocks
+    // sharing. See api/cases/[caseId]/share-ma.
+
     return NextResponse.json({ ok: true, status: "submitted", submittedAt: now });
   } catch (err) {
     // eslint-disable-next-line @typescript-eslint/no-explicit-any

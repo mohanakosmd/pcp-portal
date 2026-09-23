@@ -3,9 +3,11 @@
 // failures are logged but never propagated — they must not block the
 // underlying case operation (create / submit / share).
 
+import { PCP_CASES_COLLECTION } from "@/lib/cases";
 import { PCP_USERS_COLLECTION } from "@/lib/firebase";
 import { getDocument } from "@/lib/firestore-rest";
 import { GI_USERS_COLLECTION } from "@/lib/gi-users";
+import { listMaUsers } from "@/lib/ma-users";
 import {
   createNotification,
   type NotificationType,
@@ -120,10 +122,18 @@ function escapeHtml(s: string): string {
     .replace(/"/g, "&quot;");
 }
 
+// Absolute base for links in emails — a bare path is useless in an inbox.
+// App Hosting sets NEXT_PUBLIC_APP_URL (see apphosting.yaml); when it's unset
+// we fall back to the production domain in a prod build and to the local dev
+// server otherwise, so emails sent from a laptop link back to that laptop.
+const APP_URL =
+  process.env.NEXT_PUBLIC_APP_URL?.trim() ||
+  (process.env.NODE_ENV === "production"
+    ? "https://pcp.aigicare.com"
+    : `http://localhost:${process.env.PORT?.trim() || "3000"}`);
+
 function appUrl(path: string): string {
-  const base = process.env.NEXT_PUBLIC_APP_URL?.trim() || "";
-  if (!base) return path;
-  return base.replace(/\/+$/, "") + path;
+  return APP_URL.replace(/\/+$/, "") + path;
 }
 
 // GI specialists are sent to the GI portal (they have no PCP-portal account).
@@ -132,6 +142,29 @@ const GI_PORTAL_URL =
 
 function giUrl(path: string): string {
   return GI_PORTAL_URL.replace(/\/+$/, "") + path;
+}
+
+// MA staff have no PCP-portal account either — they work out of the admin
+// portal, where PCP-shared cases land under /pcp-cases.
+const MA_PORTAL_URL =
+  process.env.NEXT_PUBLIC_MA_PORTAL_URL?.trim() || "https://admin.aigicare.com";
+
+function maUrl(path: string): string {
+  return MA_PORTAL_URL.replace(/\/+$/, "") + path;
+}
+
+/** Patient name off the case's About subdoc, for notification copy. */
+async function readPatientName(caseId: string): Promise<string> {
+  try {
+    const doc = await getDocument(`${PCP_CASES_COLLECTION}/${caseId}/about`, "data");
+    const name = doc && typeof doc.data.fullLegalName === "string"
+      ? doc.data.fullLegalName.trim()
+      : "";
+    return name;
+  } catch (err) {
+    console.error(`[notify] could not read patient name for case ${caseId}:`, err);
+    return "";
+  }
 }
 
 // ----- Event emitters --------------------------------------------------------
@@ -174,7 +207,7 @@ export async function emitCaseSubmitted(opts: {
   const greeting = pcp?.name?.trim() || "there";
   const title = `Case #${opts.caseShortCode} submitted`;
   const body =
-    "Your case has been submitted and is ready to be shared with a GI specialist.";
+    "Your case has been submitted and is ready to be shared with Medical Assistant (MA)";
   await emitOne({
     type: "case_submitted",
     caseId: opts.caseId,
@@ -193,6 +226,68 @@ export async function emitCaseSubmitted(opts: {
       ctaUrl: appUrl(`/cases`),
     }),
   });
+}
+
+/**
+ * Fans a case share out to the entire MA team — one in-app notification doc
+ * plus one e-mail per MA. Recipients come from `admin_users` where role == "ma".
+ *
+ * This is the ONLY point at which MA staff are notified about a case: not at
+ * create time (drafts are private to the PCP and may be abandoned) and not at
+ * submit time (submitting only unlocks sharing). The share is what actually
+ * hands the case to the MA team, so that's what mails them.
+ *
+ * Wholly best-effort: an empty MA directory, a missing e-mail, or a SendGrid
+ * failure is logged and swallowed. The case operation that triggered this must
+ * never fail because a downstream notification did.
+ */
+export async function emitCaseSharedToMaTeam(opts: {
+  caseId: string;
+  caseShortCode: string;
+  ownerUserId: string;
+}): Promise<void> {
+  const [mas, pcp, patientName] = await Promise.all([
+    listMaUsers(),
+    readPcp(opts.ownerUserId),
+    readPatientName(opts.caseId),
+  ]);
+
+  if (!mas.length) {
+    console.warn("[notify case_shared->ma] no MA users found; nothing to send");
+    return;
+  }
+
+  const pcpName = pcp?.name?.trim() || "A PCP";
+  // A shared case is always past About, so the patient name is normally on
+  // file — but stay defensive and drop the clause rather than invent one.
+  const forPatient = patientName ? ` for ${patientName}` : "";
+
+  const title = `New case shared with the MA team: #${opts.caseShortCode}`;
+  const body = `${pcpName} shared a submitted case${forPatient} with the Medical Assistant team. Please share it with a Gastroenterologist.`;
+
+  // Sequential rather than parallel: SendGrid rate-limits bursts, and the MA
+  // team is small enough that this costs no meaningful latency. The caller
+  // does not await this anyway.
+  for (const ma of mas) {
+    await emitOne({
+      type: "case_shared",
+      caseId: opts.caseId,
+      caseShortCode: opts.caseShortCode,
+      title,
+      body,
+      recipientUserId: ma.id,
+      recipientType: "ma",
+      recipientEmail: ma.email,
+      emailSubject: title,
+      emailHtml: pcpEmailHtml({
+        greetingName: ma.name,
+        heading: title,
+        body,
+        ctaLabel: "View the case",
+        ctaUrl: maUrl(`/pcp-cases`),
+      }),
+    });
+  }
 }
 
 export async function emitCaseShared(opts: {

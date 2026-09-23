@@ -3,7 +3,10 @@ import { NextResponse } from "next/server";
 import { readSessionUserId } from "@/lib/auth";
 import { PCP_CASES_COLLECTION, readCaseOwnedBy } from "@/lib/cases";
 import { nowIso, upsertDocument } from "@/lib/firestore-rest";
-import { emitCaseSharedWithMa } from "@/lib/notification-events";
+import {
+  emitCaseSharedToMaTeam,
+  emitCaseSharedWithMa,
+} from "@/lib/notification-events";
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
@@ -49,11 +52,22 @@ export async function POST(
       updatedAt: now,
     });
 
+    // Fire-and-forget: notifications + email must never block the share.
+    // PCP confirmation.
     void emitCaseSharedWithMa({
       caseId,
       caseShortCode: root.shortCode || caseId,
       ownerUserId: userId,
     }).catch((err) => console.error("[cases share-ma] emitCaseSharedWithMa failed:", err));
+
+    // Hand-off alert to every MA (admin_users with role "ma").
+    void emitCaseSharedToMaTeam({
+      caseId,
+      caseShortCode: root.shortCode || caseId,
+      ownerUserId: userId,
+    }).catch((err) =>
+      console.error("[cases share-ma] emitCaseSharedToMaTeam failed:", err)
+    );
 
     return NextResponse.json({ ok: true, sharedWithMa: true, sharedWithMaAt: now });
   } catch (err) {

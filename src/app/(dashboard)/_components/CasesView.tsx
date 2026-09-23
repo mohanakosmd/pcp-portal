@@ -358,6 +358,29 @@ export function CasesView({
             <PatientHeader record={selectedCase} />
 
             <div className="cases-overview__body">
+              {/* Sits directly above the action buttons: the case goes nowhere
+                  until the PCP hands it to the MA. */}
+              <p className="cases-disclaimer" role="note">
+                <svg width="18" height="18" viewBox="0 0 24 24" fill="none" aria-hidden="true">
+                  <path
+                    d="M12 3.5L21 19.5H3L12 3.5Z"
+                    stroke="currentColor"
+                    strokeWidth="1.8"
+                    strokeLinejoin="round"
+                  />
+                  <path
+                    d="M12 10V14M12 16.5V16.51"
+                    stroke="currentColor"
+                    strokeWidth="1.8"
+                    strokeLinecap="round"
+                  />
+                </svg>
+                <span>
+                  <strong>Disclaimer:</strong> This case is not forwarded automatically. The
+                  PCP must click the <strong>Share With MA</strong> button below to send it
+                  to the medical assistant.
+                </span>
+              </p>
               <div className="cases-actions cases-actions--row">
                 <button
                   type="button"
@@ -777,7 +800,7 @@ function ReportModal({
     front: File | null;
     back: File | null;
   }>({ front: null, back: null });
-  // HPI History document staged by HpiExtractPanel — extracted values are already
+  // Consultation Document staged by HpiExtractPanel — extracted values are already
   // in healthForm; the file itself is uploaded to the case on Save.
   const [stagedHpiFile, setStagedHpiFile] = useState<File | null>(null);
   const [saving, setSaving] = useState(false);
@@ -827,13 +850,23 @@ function ReportModal({
         {editing ? (
           opts.multiline ? (
             <>
-              <textarea
-                style={{ ...editInputStyle, minHeight: 64, resize: "vertical" }}
-                value={String(healthForm[key] ?? "")}
-                placeholder={opts.placeholder}
-                onChange={(e) => setHealthField(key, e.target.value)}
-              />
-              {opts.dictate ? renderMic(opts.dictate) : null}
+              {/* The mic sits in the box's top-right corner (see .cc-dictate-wrap). */}
+              <div className="cc-dictate-wrap" style={{ marginTop: 4 }}>
+                <textarea
+                  style={{
+                    ...editInputStyle,
+                    marginTop: 0,
+                    paddingRight: opts.dictate ? 44 : undefined,
+                    minHeight: 64,
+                    resize: "vertical",
+                  }}
+                  value={String(healthForm[key] ?? "")}
+                  placeholder={opts.placeholder}
+                  onChange={(e) => setHealthField(key, e.target.value)}
+                />
+                {opts.dictate ? renderMic(opts.dictate) : null}
+              </div>
+              {opts.dictate ? renderMicStatus(opts.dictate) : null}
             </>
           ) : (
             <input
@@ -884,32 +917,33 @@ function ReportModal({
     setDictationField(null);
   };
 
-  // Mic button + its status line, bound to one field.
+  // The mic itself — pinned to the top-right corner of the box it dictates into.
   const renderMic = (field: ModalDictationField) => {
     const active = speech.listening && dictationField === field;
     return (
-      <>
-        <div className="cc-speech-action-row" style={{ marginTop: 8 }}>
-          <button
-            type="button"
-            className={`cc-speech-btn${active ? " cc-speech-btn--listening" : ""}`}
-            aria-label={active ? "Stop speech to text" : "Start speech to text"}
-            aria-pressed={active}
-            title={active ? "Stop recording" : "Speak-to-Text"}
-            onClick={() => toggleDictation(field)}
-            disabled={!speech.supported || (speech.listening && !active)}
-          >
-            <MicIcon />
-          </button>
-        </div>
-        {dictationField === field ? (
-          <p className="cc-field-hint" aria-live="polite" style={{ marginTop: 4 }}>
-            {speech.status}
-          </p>
-        ) : null}
-      </>
+      <button
+        type="button"
+        className={`cc-speech-btn cc-speech-btn--sm${
+          active ? " cc-speech-btn--listening" : ""
+        }`}
+        aria-label={active ? "Stop speech to text" : "Start speech to text"}
+        aria-pressed={active}
+        title={active ? "Stop recording" : "Speak-to-Text"}
+        onClick={() => toggleDictation(field)}
+        disabled={!speech.supported || (speech.listening && !active)}
+      >
+        <MicIcon />
+      </button>
     );
   };
+
+  // Status line for a dictated field — stays below the input it describes.
+  const renderMicStatus = (field: ModalDictationField) =>
+    dictationField === field ? (
+      <p className="cc-field-hint" aria-live="polite" style={{ marginTop: 4 }}>
+        {speech.status}
+      </p>
+    ) : null;
 
   const startEdit = () => {
     if (!canEdit) return;
@@ -1066,7 +1100,7 @@ function ReportModal({
       if (insuranceFiles.front) await uploadCard("front", insuranceFiles.front, insuranceFront);
       if (insuranceFiles.back) await uploadCard("back", insuranceFiles.back, insuranceBack);
 
-      // Attach the HPI History document, if one was staged. Its extracted values
+      // Attach the Consultation Document, if one was staged. Its extracted values
       // were already applied into healthForm and saved by the PATCH above.
       if (stagedHpiFile) {
         const fd = new FormData();
@@ -1078,7 +1112,7 @@ function ReportModal({
         });
         if (!dres.ok) {
           const ddata = (await dres.json().catch(() => ({}))) as { error?: string };
-          throw new Error(ddata.error || "Could not attach the HPI history document.");
+          throw new Error(ddata.error || "Could not attach the consultation document.");
         }
       }
 
@@ -1399,12 +1433,21 @@ function ReportModal({
               <h5>Reason for Consultation</h5>
               {editing ? (
                 <>
-                  <textarea
-                    style={{ ...editInputStyle, minHeight: 80, resize: "vertical" }}
-                    value={healthForm.inboxMessage}
-                    onChange={(e) => setHealthField("inboxMessage", e.target.value)}
-                  />
-                  {renderMic("inboxMessage")}
+                  <div className="cc-dictate-wrap" style={{ marginTop: 4 }}>
+                    <textarea
+                      style={{
+                        ...editInputStyle,
+                        marginTop: 0,
+                        paddingRight: 44,
+                        minHeight: 80,
+                        resize: "vertical",
+                      }}
+                      value={healthForm.inboxMessage}
+                      onChange={(e) => setHealthField("inboxMessage", e.target.value)}
+                    />
+                    {renderMic("inboxMessage")}
+                  </div>
+                  {renderMicStatus("inboxMessage")}
                 </>
               ) : (
                 <p>

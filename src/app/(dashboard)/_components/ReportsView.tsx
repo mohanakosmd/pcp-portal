@@ -1081,24 +1081,27 @@ function ReportModal({
             <p className="reports-remark-empty">No remarks yet. Add the first one below.</p>
           )}
 
-          <textarea
-            id="report-remark-input"
-            className="reports-modal__remark-input"
-            name="remark"
-            rows={4}
-            placeholder={
-              giHasResponded
-                ? "The GI specialist has responded — this remark is closed."
-                : "Add your remark here..."
-            }
-            value={remark}
-            onChange={(e) => onRemarkChange(e.target.value)}
-            disabled={commentSubmitting || giHasResponded}
-          />
-          <div className="cc-speech-action-row" style={{ marginTop: 8 }}>
+          {/* Mic sits in the remark box's top-right corner (see .cc-dictate-wrap). */}
+          <div className="cc-dictate-wrap">
+            <textarea
+              id="report-remark-input"
+              className="reports-modal__remark-input"
+              name="remark"
+              rows={4}
+              placeholder={
+                giHasResponded
+                  ? "The GI specialist has responded — this remark is closed."
+                  : "Add your remark here..."
+              }
+              value={remark}
+              onChange={(e) => onRemarkChange(e.target.value)}
+              disabled={commentSubmitting || giHasResponded}
+            />
             <button
               type="button"
-              className={`cc-speech-btn${speech.listening ? " cc-speech-btn--listening" : ""}`}
+              className={`cc-speech-btn cc-speech-btn--sm${
+                speech.listening ? " cc-speech-btn--listening" : ""
+              }`}
               aria-label={speech.listening ? "Stop dictating remark" : "Dictate remark"}
               aria-pressed={speech.listening}
               title={speech.listening ? "Stop recording" : "Speak-to-Text"}

@@ -13,15 +13,6 @@ function requireKey(): string {
   return key;
 }
 
-export type GenerateTextOptions = {
-  /** Defaults to gemini-2.5-flash (override via GEMINI_MODEL env). */
-  model?: string;
-  systemInstruction?: string;
-  temperature?: number;
-  maxOutputTokens?: number;
-  timeoutMs?: number;
-};
-
 /** A document/image sent alongside the prompt as an inline_data part. */
 export type InlineFile = {
   mimeType: string;
@@ -29,12 +20,30 @@ export type InlineFile = {
   dataBase64: string;
 };
 
+export type GenerateTextOptions = {
+  /** Defaults to gemini-2.5-flash (override via GEMINI_MODEL env). */
+  model?: string;
+  systemInstruction?: string;
+  temperature?: number;
+  maxOutputTokens?: number;
+  timeoutMs?: number;
+  /** PDFs/images the model reads in addition to the prompt. */
+  files?: InlineFile[];
+};
+
 export type GenerateJsonOptions = GenerateTextOptions & {
   /** OpenAPI-subset schema Gemini must conform its response to. */
   responseSchema: Record<string, unknown>;
-  /** Optional PDF/image the model reads in addition to the prompt. */
-  file?: InlineFile;
 };
+
+/** Prompt text first, then each attachment as its own inline_data part. */
+function buildParts(prompt: string, files: InlineFile[] | undefined): GeminiPart[] {
+  const parts: GeminiPart[] = [{ text: prompt }];
+  for (const file of files ?? []) {
+    parts.push({ inline_data: { mime_type: file.mimeType, data: file.dataBase64 } });
+  }
+  return parts;
+}
 
 type GeminiPart = { text: string } | { inline_data: { mime_type: string; data: string } };
 
@@ -132,7 +141,7 @@ export async function generateText(
   opts: GenerateTextOptions = {}
 ): Promise<string> {
   const body: GeminiBody = {
-    contents: [{ parts: [{ text: prompt }] }],
+    contents: [{ parts: buildParts(prompt, opts.files) }],
     generationConfig: {
       temperature: opts.temperature ?? 0.4,
       maxOutputTokens: opts.maxOutputTokens ?? 1024,
@@ -154,15 +163,8 @@ export async function generateJson<T = unknown>(
   prompt: string,
   opts: GenerateJsonOptions
 ): Promise<T> {
-  const parts: GeminiPart[] = [{ text: prompt }];
-  if (opts.file) {
-    parts.push({
-      inline_data: { mime_type: opts.file.mimeType, data: opts.file.dataBase64 },
-    });
-  }
-
   const body: GeminiBody = {
-    contents: [{ parts }],
+    contents: [{ parts: buildParts(prompt, opts.files) }],
     generationConfig: {
       temperature: opts.temperature ?? 0.1,
       maxOutputTokens: opts.maxOutputTokens ?? 2048,

@@ -2,7 +2,7 @@
 
 import { useCallback, useEffect, useRef, useState } from "react";
 
-// Upload an HPI History document, extract structured Health fields from it via
+// Upload a Consultation Document, extract structured Health fields from it via
 // /api/hpi-extract, and let the user review-then-apply the results. Fully
 // self-contained: it owns the file/extraction/review state and reports out only
 // through `onApply` (chosen values) and `onFileChange` (the staged file, so the
@@ -192,13 +192,14 @@ export function HpiExtractPanel({
     <section className="cc-hpi-section" aria-labelledby="cc-hpi-heading">
       <div className="cc-hpi-section__head">
         <h3 id="cc-hpi-heading" className="cc-hpi-section__title">
-          HPI History document
+          Consultation Documents
         </h3>
         <span className="cc-doc-badge">Optional</span>
       </div>
       <p className="cc-field-hint">
-        Upload the patient&apos;s HPI history and we&apos;ll read the pharmacy, allergies, and
-        other health details out of it and fill in the empty fields automatically.
+        Upload the patient&apos;s consultation document and we&apos;ll read the pharmacy,
+        allergies, and other health details out of it and fill in the empty fields
+        automatically.
       </p>
 
       <div className="cc-field cc-hpi-section__drop">
@@ -227,7 +228,7 @@ export function HpiExtractPanel({
             </span>
           ) : (
             <span className="cc-hpi-drop__text">
-              <strong>Choose the HPI history document</strong>
+              <strong>Choose the consultation document</strong>
               <span>PDF, PNG, JPG, WebP, or TXT · Max 5 MB</span>
             </span>
           )}

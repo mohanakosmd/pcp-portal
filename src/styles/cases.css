@@ -466,6 +466,34 @@
   gap: 18px;
 }
 
+/* Red, directly above View Report / Share With MA. Spacing comes from the
+   flex gap on .cases-overview__body. */
+.cases-disclaimer {
+  display: flex;
+  gap: 10px;
+  align-items: flex-start;
+  margin: 0;
+  padding: 12px 14px;
+  border: 1px solid #fecaca;
+  border-left: 4px solid #dc2626;
+  border-radius: calc(var(--dash-radius) + 2px);
+  background: #fef2f2;
+  color: #b91c1c;
+  font-size: 13.5px;
+  font-weight: 600;
+  line-height: 1.5;
+}
+
+.cases-disclaimer svg {
+  flex-shrink: 0;
+  margin-top: 1px;
+  color: #dc2626;
+}
+
+.cases-disclaimer strong {
+  font-weight: 800;
+}
+
 .cases-patient {
   display: flex;
   flex-wrap: wrap;

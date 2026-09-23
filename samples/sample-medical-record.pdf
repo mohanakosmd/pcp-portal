@@ -1,0 +1,66 @@
+%PDF-1.4
+1 0 obj
+<< /Type /Catalog /Pages 2 0 R >>
+endobj
+2 0 obj
+<< /Type /Pages /Kids [3 0 R] /Count 1 >>
+endobj
+3 0 obj
+<< /Type /Page /Parent 2 0 R /MediaBox [0 0 595 842] /Resources << /Font << /F1 5 0 R /F2 6 0 R >> >> /Contents 4 0 R >>
+endobj
+4 0 obj
+<< /Length 2636 >>
+stream
+BT /F2 16 Tf 1 0 0 1 56 770 Tm (AIGI Care - Primary Care Visit Note) Tj ET
+BT /F1 9 Tf 1 0 0 1 56 748 Tm (SAMPLE DOCUMENT - test data only, not a real patient record) Tj ET
+BT /F1 10 Tf 1 0 0 1 56 702 Tm (Patient: Jordan A. Ellis          DOB: 1978-04-12 \(47y\)          Sex: Male) Tj ET
+BT /F1 10 Tf 1 0 0 1 56 686 Tm (MRN: SAMPLE-104829                Visit date: 2026-08-04) Tj ET
+BT /F1 10 Tf 1 0 0 1 56 670 Tm (Provider: Dr. Maria Chen, MD - Riverside Family Medicine) Tj ET
+BT /F2 12 Tf 1 0 0 1 56 627 Tm (Chief complaint) Tj ET
+BT /F1 11 Tf 1 0 0 1 56 609 Tm (Intermittent upper abdominal pain and reflux for approximately 4 months,) Tj ET
+BT /F1 11 Tf 1 0 0 1 56 592 Tm (worse after meals and at night.) Tj ET
+BT /F2 12 Tf 1 0 0 1 56 550 Tm (History of present illness) Tj ET
+BT /F1 11 Tf 1 0 0 1 56 532 Tm (Burning epigastric discomfort 3-4 times per week, rated 5/10, radiating to) Tj ET
+BT /F1 11 Tf 1 0 0 1 56 515 Tm (the chest. Partial relief with over-the-counter antacids. Reports early) Tj ET
+BT /F1 11 Tf 1 0 0 1 56 498 Tm (satiety and 3 kg unintentional weight loss over 3 months. No melena, no) Tj ET
+BT /F1 11 Tf 1 0 0 1 56 481 Tm (hematemesis, no dysphagia. No NSAID use.) Tj ET
+BT /F2 12 Tf 1 0 0 1 56 439 Tm (Past medical history) Tj ET
+BT /F1 11 Tf 1 0 0 1 56 421 Tm (Hypertension \(2019\). Hyperlipidemia \(2021\). GERD \(2024\).) Tj ET
+BT /F2 12 Tf 1 0 0 1 56 379 Tm (Medications) Tj ET
+BT /F1 11 Tf 1 0 0 1 56 361 Tm (Lisinopril 10 mg daily. Atorvastatin 20 mg nightly.) Tj ET
+BT /F1 11 Tf 1 0 0 1 56 344 Tm (Omeprazole 20 mg daily \(started 2026-06-15\).) Tj ET
+BT /F2 12 Tf 1 0 0 1 56 302 Tm (Allergies) Tj ET
+BT /F1 11 Tf 1 0 0 1 56 284 Tm (Penicillin - rash.) Tj ET
+BT /F2 12 Tf 1 0 0 1 56 242 Tm (Examination) Tj ET
+BT /F1 11 Tf 1 0 0 1 56 224 Tm (BP 128/78, HR 74, Temp 36.8 C, BMI 27.4. Abdomen soft, mild epigastric) Tj ET
+BT /F1 11 Tf 1 0 0 1 56 207 Tm (tenderness, no guarding, no palpable mass. Bowel sounds normal.) Tj ET
+BT /F2 12 Tf 1 0 0 1 56 165 Tm (Assessment and plan) Tj ET
+BT /F1 11 Tf 1 0 0 1 56 147 Tm (1. Persistent dyspepsia with alarm features \(weight loss, age > 45\).) Tj ET
+BT /F1 11 Tf 1 0 0 1 56 130 Tm (2. Referred to gastroenterology for evaluation and consideration of upper) Tj ET
+BT /F1 11 Tf 1 0 0 1 56 113 Tm (   endoscopy.) Tj ET
+BT /F1 11 Tf 1 0 0 1 56 96 Tm (3. Continue omeprazole 20 mg daily pending GI review.) Tj ET
+BT /F1 11 Tf 1 0 0 1 56 79 Tm (4. H. pylori stool antigen and CBC/CMP ordered - see lab report.) Tj ET
+BT /F1 9 Tf 1 0 0 1 56 31 Tm (Electronically signed by Dr. Maria Chen, MD on 2026-08-04 16:22) Tj ET
+0.6 w 0.72 0.75 0.8 RG 56 738 m 539 738 l S
+endstream
+endobj
+5 0 obj
+<< /Type /Font /Subtype /Type1 /BaseFont /Helvetica /Encoding /WinAnsiEncoding >>
+endobj
+6 0 obj
+<< /Type /Font /Subtype /Type1 /BaseFont /Helvetica-Bold /Encoding /WinAnsiEncoding >>
+endobj
+xref
+0 7
+0000000000 65535 f 
+0000000009 00000 n 
+0000000058 00000 n 
+0000000115 00000 n 
+0000000251 00000 n 
+0000002939 00000 n 
+0000003036 00000 n 
+trailer
+<< /Size 7 /Root 1 0 R >>
+startxref
+3138
+%%EOF

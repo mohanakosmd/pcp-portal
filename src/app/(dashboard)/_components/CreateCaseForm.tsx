@@ -23,7 +23,7 @@ import { MedicationPicker } from "./MedicationPicker";
 import { MicIcon } from "./MicIcon";
 import { useSpeechToText } from "./useSpeechToText";
 
-type StepNumber = 1 | 2 | 3;
+type StepNumber = 1 | 2;
 
 /**
  * Health fields that support dictation. Free text only — the phone/fax fields
@@ -45,9 +45,9 @@ const HEALTH_FIELD_NAMES: Record<DictationField, string> = {
   pharmacyInformation: "Pharmacy Information",
 };
 
-// The three document upload widgets, each validated/highlighted independently.
+// How a document is labelled. One upload widget takes every file; each file
+// then carries its own label, picked from this list in the selected-files row.
 type DocSection = "primary" | "lab" | "other";
-type DocErrorMap = Record<DocSection, string[]>;
 
 /** Firestore document `kind` each upload tile stores, so the tile a file was
  *  dropped into survives a reload. Must stay within VALID_KINDS in
@@ -58,21 +58,24 @@ const SECTION_KIND: Record<DocSection, string> = {
   other: "other",
 };
 
-/** Tile name shown on a freshly picked (not yet uploaded) file row. Kept
+/** Label shown on a freshly picked (not yet uploaded) file row. Kept
  *  separate from formatExistingDocLabel's map on purpose: files uploaded
  *  before `medical_record` existed are all stored as `other`, and labelling
- *  those "Other attachments" would misreport where they actually came from —
- *  they stay the neutral "Document". */
+ *  those "Other attachments" would misreport what they actually are — they
+ *  stay the neutral "Document". */
 const SECTION_LABEL: Record<DocSection, string> = {
   primary: "Medical Records",
   lab: "Lab Investigations",
   other: "Other attachments",
 };
 
+/** Options in each file row's label picker. New files start as Medical Records. */
+const DOC_SECTIONS: DocSection[] = ["primary", "lab", "other"];
+const DEFAULT_DOC_SECTION: DocSection = "primary";
+
 const STEPS: { id: StepNumber; label: string }[] = [
   { id: 1, label: "Patient details" },
   { id: 2, label: "Health" },
-  { id: 3, label: "Files" },
 ];
 
 /**
@@ -95,8 +98,7 @@ function Opt() {
 
 const NEXT_LABELS: Record<StepNumber, string> = {
   1: "Next: Medical history",
-  2: "Next: Document upload",
-  3: "Submit case",
+  2: "Submit case",
 };
 
 // Maps a Step 1 form field `name` → the error key used in fieldErrors, so a
@@ -120,9 +122,13 @@ type UploadedFile = {
   serverFileId?: string; // pcp_cases/{id}/documents/{fileId} once uploaded
   name: string;
   meta: string;
-  /** Firestore document `kind` — the upload tile this file came from. Sent on
-   *  upload so the tile survives a reload. */
+  /** Firestore document `kind` — derived from `section`. Sent on upload so the
+   *  label survives a reload. */
   kind: string;
+  /** The label picked for this file. Only set while the file is still local:
+   *  once uploaded, the label is fixed (there's no API to re-label it), so the
+   *  row shows static text instead of the picker. */
+  section?: DocSection;
   status: UploadStatus;
   error?: string;
 };
@@ -200,13 +206,13 @@ function formatBytes(bytes: number): string {
   return `${Math.round(kb)} KB`;
 }
 
-function formatExistingDocLabel(kind: string, contentType: string): string {
+function formatExistingDocLabel(kind: string, contentType = ""): string {
   const kinds: Record<string, string> = {
     medical_record: "Medical Records",
     lab: "Lab Investigations",
     imaging: "Imaging",
     note: "Note",
-    hpi_history: "HPI history",
+    hpi_history: "Consultation Documents",
     other: "Document",
   };
   if (kinds[kind]) return kinds[kind];
@@ -214,7 +220,7 @@ function formatExistingDocLabel(kind: string, contentType: string): string {
   return "Document";
 }
 
-function formatFileMeta(file: File, section: DocSection): string {
+function formatFileMeta(file: File): string {
   const sizeMb = file.size / (1024 * 1024);
   const sizeKb = file.size / 1024;
   const sizeLabel = sizeMb >= 1 ? `${sizeMb.toFixed(1)} MB` : `${Math.round(sizeKb)} KB`;
@@ -222,9 +228,8 @@ function formatFileMeta(file: File, section: DocSection): string {
     ? "Image"
     : file.name.split(".").pop()?.toUpperCase() || "File";
   const time = new Date().toLocaleTimeString([], { hour: "numeric", minute: "2-digit" });
-  // Lead with the tile the file came from — with three upload targets, the row
-  // is otherwise ambiguous once several files are listed together.
-  return `${SECTION_LABEL[section]} · ${kindLabel} · ${sizeLabel} · Today, ${time}`;
+  // No label prefix here — the row's own picker shows (and sets) that.
+  return `${kindLabel} · ${sizeLabel} · Today, ${time}`;
 }
 
 /**
@@ -282,8 +287,10 @@ export function CreateCaseForm({
   pcpProfile?: PcpProfile | null;
 }) {
   const router = useRouter();
+  // Saved drafts may carry a step 3 from when documents had their own tab —
+  // the upload widgets now live on the Health step, so clamp it there.
   const [currentStep, setCurrentStep] = useState<StepNumber>(
-    initialCase?.currentStep ?? 1
+    initialCase ? (Math.min(initialCase.currentStep, STEPS.length) as StepNumber) : 1
   );
   const [files, setFiles] = useState<UploadedFile[]>(() =>
     initialCase
@@ -291,18 +298,16 @@ export function CreateCaseForm({
           id: `existing-${d.fileId}`,
           serverFileId: d.fileId,
           name: d.fileName,
-          meta: `${formatExistingDocLabel(d.kind, d.contentType)} · ${formatBytes(d.sizeBytes)}`,
+          // The label lives in the row's own label column, so it isn't
+          // repeated here.
+          meta: formatBytes(d.sizeBytes),
           kind: d.kind,
           status: "done" as const,
         }))
       : initialFiles
   );
   const [isDragOver, setIsDragOver] = useState(false);
-  const [docErrors, setDocErrors] = useState<DocErrorMap>({
-    primary: [],
-    lab: [],
-    other: [],
-  });
+  const [docErrors, setDocErrors] = useState<string[]>([]);
   const [inboxMessage, setInboxMessage] = useState(
     initialCase?.health.inboxMessage ?? ""
   );
@@ -334,7 +339,7 @@ export function CreateCaseForm({
     initialCase?.health.pharmacyPhone ?? ""
   );
   const [pharmacyFax, setPharmacyFax] = useState(initialCase?.health.pharmacyFax ?? "");
-  // HPI History document: the HpiExtractPanel owns the parse/review workflow and
+  // Consultation Documents: the HpiExtractPanel owns the parse/review workflow and
   // hands the staged file up via onFileChange. Held here so it's uploaded (like
   // the insurance cards) on save/submit.
   const [hpiFile, setHpiFile] = useState<File | null>(null);
@@ -359,7 +364,7 @@ export function CreateCaseForm({
   // Highest step unlocked. You can only advance past a step (or jump to a
   // later tab) once the current part is complete — see handleNext. When
   // resuming a saved draft, every step is already unlocked.
-  const [maxStep, setMaxStep] = useState<StepNumber>(initialCase ? 3 : 1);
+  const [maxStep, setMaxStep] = useState<StepNumber>(initialCase ? 2 : 1);
   const [insuranceFiles, setInsuranceFiles] = useState<{
     front: File | null;
     back: File | null;
@@ -537,7 +542,8 @@ export function CreateCaseForm({
    * each field, matching Step 1. The reason for consultation is required to
    * advance/submit (requireInbox); the phone/fax fields, when provided, must be
    * valid numbers. Every other Health field is optional free text (pharmacy,
-   * allergies, social history included). Step 3 (Files) has no required fields.
+   * allergies, social history included). The document uploads on this step are
+   * optional too.
    */
   function healthFieldErrors(opts: { requireInbox: boolean }): Record<string, string> {
     const errs: Record<string, string> = {};
@@ -654,14 +660,15 @@ export function CreateCaseForm({
   }
 
   /**
-   * Attaches the Step 2 HPI History document, if one was picked. The extracted
+   * Attaches the Step 2 Consultation Document, if one was picked. The extracted
    * values are already in the Health fields by this point — this preserves the
    * source document alongside them so a reviewer can check the parse.
    */
   async function uploadHpiDocument(id: string): Promise<void> {
     if (!hpiFile) return;
     const result = await uploadOneFile(id, hpiFile, "hpi_history");
-    if (!result.ok) throw new Error(result.error || "HPI document upload failed.");
+    if (!result.ok)
+      throw new Error(result.error || "Consultation document upload failed.");
     // Clear the staged file so a later save doesn't attach a second copy. The
     // extraction panel stays as-is — it documents what was applied.
     setHpiFile(null);
@@ -670,7 +677,7 @@ export function CreateCaseForm({
   // Next advances ONLY when the current part is complete. Nothing is written
   // to Firebase here — all entered values stay in the form (panels stay
   // mounted) so moving back and forth preserves everything. Persistence
-  // happens only on "Save draft" or the step-3 "Submit case" button.
+  // happens only on "Save draft" or the final "Submit case" button.
   const handleNext = () => {
     if (currentStep === 1) {
       const errs = aboutFieldErrors();
@@ -756,7 +763,7 @@ export function CreateCaseForm({
   };
 
   /**
-   * Uploads any Step 3 documents still held in memory (status "pending").
+   * Uploads any documents still held in memory (status "pending").
    * Attempts EVERY pending file (doesn't stop at the first failure) so one bad
    * file doesn't strand the rest; each file's row shows its own done/error
    * state. Throws a single combined, specific error if any file ultimately
@@ -793,8 +800,8 @@ export function CreateCaseForm({
   }
 
   /**
-   * Writes the WHOLE form (all three steps) to Firebase in one pass: insurance
-   * cards, About details, Health details, and any pending Step 3 documents.
+   * Writes the WHOLE form (both steps) to Firebase in one pass: insurance
+   * cards, About details, Health details, and any pending documents.
    * Used by both "Save draft" and "Submit case".
    */
   async function persistAll(id: string): Promise<void> {
@@ -885,7 +892,7 @@ export function CreateCaseForm({
       return;
     }
     // The case is only "created" (submitted) once EVERY part is complete.
-    // Files (step 3) are optional, so just re-check About + Health here.
+    // Documents are optional, so just re-check About + Health here.
     const aboutErrs = aboutFieldErrors();
     if (Object.keys(aboutErrs).length) {
       setFieldErrors(aboutErrs);
@@ -933,7 +940,7 @@ export function CreateCaseForm({
 
   // Just hold picked files in memory with status "pending". They're uploaded
   // later, in one pass, by Save draft / Submit (uploadPendingFiles).
-  const addFiles = async (fileList: FileList | null, section: DocSection) => {
+  const addFiles = async (fileList: FileList | null) => {
     if (!fileList || fileList.length === 0) return;
     const picked = Array.from(fileList);
     // Drag-and-drop bypasses the input's `accept`, so enforce the format here
@@ -968,27 +975,33 @@ export function CreateCaseForm({
       }
     }
 
-    // Route errors to the widget that was used. When some files were accepted,
-    // that widget's earlier errors are stale — show just this batch's;
-    // otherwise keep accumulating across sequential attempts.
-    setDocErrors((prev) => ({
-      ...prev,
-      [section]:
-        accepted.length > 0
-          ? messages
-          : Array.from(new Set([...prev[section], ...messages])),
-    }));
+    // When some files were accepted, earlier errors are stale — show just this
+    // batch's; otherwise keep accumulating across sequential attempts.
+    setDocErrors((prev) =>
+      accepted.length > 0 ? messages : Array.from(new Set([...prev, ...messages]))
+    );
 
     if (accepted.length === 0) return;
     const entries: UploadedFile[] = accepted.map((file) => ({
       id: `${file.name}-${file.lastModified}-${Math.random().toString(36).slice(2, 7)}`,
       file,
       name: file.name,
-      meta: formatFileMeta(file, section),
-      kind: SECTION_KIND[section],
+      meta: formatFileMeta(file),
+      kind: SECTION_KIND[DEFAULT_DOC_SECTION],
+      section: DEFAULT_DOC_SECTION,
       status: "pending" as const,
     }));
     setFiles((prev) => [...prev, ...entries]);
+  };
+
+  // Re-labels a not-yet-uploaded file. The label decides the Firestore `kind`
+  // sent when it's finally uploaded, so this is just local state until then.
+  const handleFileSectionChange = (id: string, section: DocSection) => {
+    setFiles((prev) =>
+      prev.map((entry) =>
+        entry.id === id ? { ...entry, section, kind: SECTION_KIND[section] } : entry
+      )
+    );
   };
 
   const handleFileTrigger = () => {
@@ -998,7 +1011,7 @@ export function CreateCaseForm({
   const handleDrop = (event: DragEvent<HTMLDivElement>) => {
     event.preventDefault();
     setIsDragOver(false);
-    addFiles(event.dataTransfer?.files ?? null, "primary");
+    addFiles(event.dataTransfer?.files ?? null);
   };
 
   const handleDragEvent = (event: DragEvent<HTMLDivElement>, over: boolean) => {
@@ -1353,20 +1366,20 @@ export function CreateCaseForm({
           onHpiApply={hpiApply}
           onHpiFileChange={handleHpiFileChange}
           errors={fieldErrors}
-        />
-        <Step3Panel
-          active={currentStep === 3}
-          files={files}
-          isDragOver={isDragOver}
-          errors={docErrors}
-          onDrop={handleDrop}
-          onDragOver={(e) => handleDragEvent(e, true)}
-          onDragEnter={(e) => handleDragEvent(e, true)}
-          onDragLeave={(e) => handleDragEvent(e, false)}
-          onFileTrigger={handleFileTrigger}
-          onFilesPicked={(list, section) => addFiles(list, section)}
-          onRemoveFile={handleRemoveFile}
-          fileInputRef={fileInputRef}
+          documents={{
+            files,
+            isDragOver,
+            errors: docErrors,
+            onDrop: handleDrop,
+            onDragOver: (e) => handleDragEvent(e, true),
+            onDragEnter: (e) => handleDragEvent(e, true),
+            onDragLeave: (e) => handleDragEvent(e, false),
+            onFileTrigger: handleFileTrigger,
+            onFilesPicked: (list) => addFiles(list),
+            onSectionChange: handleFileSectionChange,
+            onRemoveFile: handleRemoveFile,
+            fileInputRef,
+          }}
         />
 
         {serverError ? (
@@ -1404,18 +1417,16 @@ export function CreateCaseForm({
             </button>
           </div>
           <div className="cc-step1-actions__right">
-            {/* "Save draft" is for the earlier steps. On the final File step the
-                workflow is to submit, so it's hidden there. */}
-            {!isLast ? (
-              <button
-                type="button"
-                className="cc-btn cc-btn--outline"
-                onClick={handleSaveDraft}
-                disabled={saving}
-              >
-                {saving ? "Saving…" : "Save draft"}
-              </button>
-            ) : null}
+            {/* Available on every step — with documents now on the Health step,
+                the last step is still a place you may want to stop and resume. */}
+            <button
+              type="button"
+              className="cc-btn cc-btn--outline"
+              onClick={handleSaveDraft}
+              disabled={saving}
+            >
+              {saving ? "Saving…" : "Save draft"}
+            </button>
             <button
               type="button"
               className="cc-btn cc-btn--primary"
@@ -1930,6 +1941,8 @@ type Step2PanelProps = {
   onHpiApply: (values: Partial<Record<HpiField, string>>) => void;
   onHpiFileChange: (file: File | null) => void;
   errors: Record<string, string>;
+  /** Document upload widgets — rendered inline under Reason for Consultation. */
+  documents: DocumentsSectionProps;
 };
 
 function Step2Panel({
@@ -1969,6 +1982,7 @@ function Step2Panel({
   onHpiApply,
   onHpiFileChange,
   errors,
+  documents,
 }: Step2PanelProps) {
   const fieldError = (key: string) =>
     errors[key] ? (
@@ -1977,42 +1991,43 @@ function Step2Panel({
       </span>
     ) : null;
 
-  /** Mic + its status line, bound to one dictatable field. */
-  const dictation = (field: DictationField) => {
+  /** The mic itself — pinned to the top-right corner of the field it dictates into. */
+  const micButton = (field: DictationField) => {
     const active = isListening && dictationField === field;
     return (
-      <>
-        <div className="cc-speech-action-row">
-          <button
-            type="button"
-            className={`cc-speech-btn${active ? " cc-speech-btn--listening" : ""}`}
-            aria-label={
-              active
-                ? `Stop dictating ${HEALTH_FIELD_NAMES[field]}`
-                : `Dictate ${HEALTH_FIELD_NAMES[field]}`
-            }
-            aria-pressed={active}
-            title={active ? "Stop recording" : "Speak-to-Text"}
-            onClick={() => onToggleDictation(field)}
-            // While one field is being dictated, the other mics are inert —
-            // the recognizer is single-track, so a second one would hijack it.
-            disabled={!speechSupported || (isListening && !active)}
-          >
-            <MicIcon />
-          </button>
-        </div>
-        {/* One status line at a time: the field being dictated, or — when the
-            browser has no recognizer at all — a single notice on the first
-            field rather than the same sentence repeated five times. */}
-        {dictationField === field ||
-        (!speechSupported && dictationField === null && field === "inboxMessage") ? (
-          <p className="cc-field-hint" aria-live="polite">
-            {speechStatus}
-          </p>
-        ) : null}
-      </>
+      <button
+        type="button"
+        className={`cc-speech-btn cc-speech-btn--sm${
+          active ? " cc-speech-btn--listening" : ""
+        }`}
+        aria-label={
+          active
+            ? `Stop dictating ${HEALTH_FIELD_NAMES[field]}`
+            : `Dictate ${HEALTH_FIELD_NAMES[field]}`
+        }
+        aria-pressed={active}
+        title={active ? "Stop recording" : "Speak-to-Text"}
+        onClick={() => onToggleDictation(field)}
+        // While one field is being dictated, the other mics are inert —
+        // the recognizer is single-track, so a second one would hijack it.
+        disabled={!speechSupported || (isListening && !active)}
+      >
+        <MicIcon />
+      </button>
     );
   };
+
+  /** Status line for a dictatable field — stays below the input it describes. */
+  const dictationStatus = (field: DictationField) =>
+    // One status line at a time: the field being dictated, or — when the
+    // browser has no recognizer at all — a single notice on the first field
+    // rather than the same sentence repeated five times.
+    dictationField === field ||
+    (!speechSupported && dictationField === null && field === "inboxMessage") ? (
+      <p className="cc-field-hint" aria-live="polite">
+        {speechStatus}
+      </p>
+    ) : null;
 
   return (
     <div
@@ -2034,7 +2049,8 @@ function Step2Panel({
           </h3>
           <p className="cc-step1-aside__text">
             In your own words, describe what&apos;s going on. List allergies and conditions your
-            doctors should know about.
+            doctors should know about, and attach any records, labs, or images. Files are
+            encrypted in transit and at rest.
           </p>
         </aside>
 
@@ -2052,7 +2068,7 @@ function Step2Panel({
               </p>
             </div>
 
-            <div className="cc-banner cc-banner--step2">
+            <div className="cc-banner cc-banner--step2 cc-banner--highlight">
               <svg width="20" height="20" viewBox="0 0 24 24" fill="none" aria-hidden="true">
                 <circle cx="12" cy="12" r="9" stroke="currentColor" strokeWidth="1.8" />
                 <path
@@ -2068,12 +2084,8 @@ function Step2Panel({
               </span>
             </div>
 
-            <div className="cc-field cc-field--tight-top">
-              <label className="cc-medical-details__section-label">
-                Please select one option
-              </label>
-              <input type="hidden" name="selected_symptom" value="Inbox" />
-            </div>
+            {/* Always "Inbox" — the picker this used to label was removed. */}
+            <input type="hidden" name="selected_symptom" value="Inbox" />
 
             <div className="cc-field cc-field--emphasis cc-field--clinical-block">
               <label
@@ -2083,32 +2095,24 @@ function Step2Panel({
                 <Req />
                 Reason for Consultation
               </label>
-              <textarea
-                id="cc-inbox-message"
-                name="inbox_message"
-                className="cc-textarea"
-                rows={4}
-                placeholder="Describe your current symptoms, concerns, or updates..."
-                value={inboxMessage}
-                onChange={(e) => onInboxChange(e.target.value)}
-                aria-invalid={errors.inboxMessage ? true : undefined}
-              />
-              {dictation("inboxMessage")}
+              <div className="cc-dictate-wrap">
+                <textarea
+                  id="cc-inbox-message"
+                  name="inbox_message"
+                  className="cc-textarea"
+                  rows={4}
+                  placeholder="Describe your current symptoms, concerns, or updates..."
+                  value={inboxMessage}
+                  onChange={(e) => onInboxChange(e.target.value)}
+                  aria-invalid={errors.inboxMessage ? true : undefined}
+                />
+                {micButton("inboxMessage")}
+              </div>
+              {dictationStatus("inboxMessage")}
               {fieldError("inboxMessage")}
             </div>
 
-            <div className="cc-field cc-field--clinical-block">
-              <label className="cc-medical-details__section-label">
-                Current Medication <Opt />
-              </label>
-              <MedicationPicker
-                value={currentMedications}
-                onChange={onCurrentMedicationsChange}
-              />
-              <p className="cc-field-hint" style={{ marginTop: 8 }}>
-                Medications reported by the patient during intake.
-              </p>
-            </div>
+            <DocumentsSection {...documents} />
           </section>
 
           <section
@@ -2225,61 +2229,87 @@ function Step2Panel({
                   <label htmlFor="cc-pharmacy-info">
                     Pharmacy Information <Opt />
                   </label>
-                  <textarea
-                    className="cc-textarea"
-                    id="cc-pharmacy-info"
-                    name="pharmacy_information"
-                    rows={2}
-                    placeholder="Pharmacy name and address"
-                    value={pharmacyInformation}
-                    onChange={(e) => onPharmacyInformationChange(e.target.value)}
-                  />
-                  {dictation("pharmacyInformation")}
+                  <div className="cc-dictate-wrap">
+                    <textarea
+                      className="cc-textarea"
+                      id="cc-pharmacy-info"
+                      name="pharmacy_information"
+                      rows={2}
+                      placeholder="Pharmacy name and address"
+                      value={pharmacyInformation}
+                      onChange={(e) => onPharmacyInformationChange(e.target.value)}
+                    />
+                    {micButton("pharmacyInformation")}
+                  </div>
+                  {dictationStatus("pharmacyInformation")}
                 </div>
                 <div className="cc-field cc-step1-field-full">
                   <label htmlFor="cc-allergies">
                     Allergies <Opt />
                   </label>
-                  <textarea
-                    className="cc-textarea"
-                    id="cc-allergies"
-                    name="allergies"
-                    rows={2}
-                    placeholder="Medications, foods, environmental — or 'None known'"
-                    value={allergies}
-                    onChange={(e) => onAllergiesChange(e.target.value)}
-                  />
-                  {dictation("allergies")}
+                  <div className="cc-dictate-wrap">
+                    <textarea
+                      className="cc-textarea"
+                      id="cc-allergies"
+                      name="allergies"
+                      rows={2}
+                      placeholder="Medications, foods, environmental — or 'None known'"
+                      value={allergies}
+                      onChange={(e) => onAllergiesChange(e.target.value)}
+                    />
+                    {micButton("allergies")}
+                  </div>
+                  {dictationStatus("allergies")}
                 </div>
                 <div className="cc-field cc-step1-field-full">
                   <label htmlFor="cc-past-surgical">
                     Past Surgical History <Opt />
                   </label>
-                  <textarea
-                    className="cc-textarea"
-                    id="cc-past-surgical"
-                    name="past_surgical_history"
-                    rows={2}
-                    placeholder="Prior surgeries and approximate dates"
-                    value={pastSurgicalHistory}
-                    onChange={(e) => onPastSurgicalHistoryChange(e.target.value)}
-                  />
-                  {dictation("pastSurgicalHistory")}
+                  <div className="cc-dictate-wrap">
+                    <textarea
+                      className="cc-textarea"
+                      id="cc-past-surgical"
+                      name="past_surgical_history"
+                      rows={2}
+                      placeholder="Prior surgeries and approximate dates"
+                      value={pastSurgicalHistory}
+                      onChange={(e) => onPastSurgicalHistoryChange(e.target.value)}
+                    />
+                    {micButton("pastSurgicalHistory")}
+                  </div>
+                  {dictationStatus("pastSurgicalHistory")}
                 </div>
                 <div className="cc-field cc-step1-field-full">
                   <label htmlFor="cc-social-history">
                     Social History <Opt />
                   </label>
-                  <textarea
-                    className="cc-textarea"
-                    id="cc-social-history"
-                    name="social_history"
-                    rows={2}
-                    placeholder="Tobacco, alcohol, occupation, etc."
-                    value={socialHistory}
-                    onChange={(e) => onSocialHistoryChange(e.target.value)}
+                  <div className="cc-dictate-wrap">
+                    <textarea
+                      className="cc-textarea"
+                      id="cc-social-history"
+                      name="social_history"
+                      rows={2}
+                      placeholder="Tobacco, alcohol, occupation, etc."
+                      value={socialHistory}
+                      onChange={(e) => onSocialHistoryChange(e.target.value)}
+                    />
+                    {micButton("socialHistory")}
+                  </div>
+                  {dictationStatus("socialHistory")}
+                </div>
+                <div className="cc-field cc-step1-field-full">
+                  {/* A span, not a label: MedicationPicker is a composite
+                      widget with no single control to point htmlFor at. */}
+                  <span className="cc-label">
+                    Current Medication <Opt />
+                  </span>
+                  <MedicationPicker
+                    value={currentMedications}
+                    onChange={onCurrentMedicationsChange}
                   />
-                  {dictation("socialHistory")}
+                  <p className="cc-field-hint">
+                    Medications reported by the patient during intake.
+                  </p>
                 </div>
               </div>
             </div>
@@ -2290,17 +2320,17 @@ function Step2Panel({
   );
 }
 
-type Step3PanelProps = {
-  active: boolean;
+type DocumentsSectionProps = {
   files: UploadedFile[];
   isDragOver: boolean;
-  errors: DocErrorMap;
+  errors: string[];
   onDrop: (event: DragEvent<HTMLDivElement>) => void;
   onDragOver: (event: DragEvent<HTMLDivElement>) => void;
   onDragEnter: (event: DragEvent<HTMLDivElement>) => void;
   onDragLeave: (event: DragEvent<HTMLDivElement>) => void;
   onFileTrigger: () => void;
-  onFilesPicked: (list: FileList | null, section: DocSection) => void;
+  onFilesPicked: (list: FileList | null) => void;
+  onSectionChange: (id: string, section: DocSection) => void;
   onRemoveFile: (id: string) => void;
   fileInputRef: React.MutableRefObject<HTMLInputElement | null>;
 };
@@ -2318,8 +2348,11 @@ function DocErrorList({ messages }: { messages: string[] }) {
   );
 }
 
-function Step3Panel({
-  active,
+/**
+ * Document upload widgets. Lives inline on the Health step (directly under
+ * Reason for Consultation) — it used to be its own "Files" step.
+ */
+function DocumentsSection({
   files,
   isDragOver,
   errors,
@@ -2329,201 +2362,133 @@ function Step3Panel({
   onDragLeave,
   onFileTrigger,
   onFilesPicked,
+  onSectionChange,
   onRemoveFile,
   fileInputRef,
-}: Step3PanelProps) {
-  const labInputRef = useRef<HTMLInputElement | null>(null);
-  const otherInputRef = useRef<HTMLInputElement | null>(null);
+}: DocumentsSectionProps) {
   return (
-    <div
-      className={`cc-panel cc-panel--step3${active ? " is-active" : ""}`}
-      id="cc-panel-3"
-      data-panel="3"
-      role="tabpanel"
-      aria-labelledby="cc-tab-3"
-      hidden={!active}
-    >
-      <div className="cc-step2-split">
-        <aside
-          className="cc-step1-aside cc-aside--sleek"
-          aria-labelledby="cc-step3-aside-title"
-        >
-          <span className="cc-step1-aside__eyebrow">Step 3</span>
-          <h3 id="cc-step3-aside-title" className="cc-step1-aside__title">
-            Documentation
-          </h3>
-          <p className="cc-step1-aside__text">
-            Upload imaging, labs, and supporting documents. Files are encrypted in transit and
-            at rest.
-          </p>
-        </aside>
+    <div className="cc-field cc-field--clinical-block cc-docs-inline">
+      <div className="cc-doc-head">
+        <div className="cc-doc-head__text">
+          <h3 className="cc-medical-details__section-label">Documents &amp; images</h3>
+        </div>
+        <span className="cc-doc-badge">Optional</span>
+      </div>
 
-        <div className="cc-step3-main">
-          <section className="dash-card cc-step1-card">
-            <div className="cc-doc-head cc-step1-card__head--ruled">
-              <div className="cc-doc-head__text">
-                <h2 className="cc-step1-card__title">Documents &amp; images</h2>
-              </div>
-              <span className="cc-doc-badge">Optional</span>
-            </div>
+      <p className="cc-doc-tip">
+        <svg width="16" height="16" viewBox="0 0 24 24" fill="none" aria-hidden="true">
+          <path d="M12 16v-4M12 8h.01" stroke="currentColor" strokeWidth="2" strokeLinecap="round" />
+          <circle cx="12" cy="12" r="9" stroke="currentColor" strokeWidth="1.6" />
+        </svg>
+        Files are encrypted when you upload. Max 5 MB per file.
+      </p>
 
-            <p className="cc-doc-tip">
-              <svg width="16" height="16" viewBox="0 0 24 24" fill="none" aria-hidden="true">
-                <path
-                  d="M12 16v-4M12 8h.01"
-                  stroke="currentColor"
-                  strokeWidth="2"
-                  strokeLinecap="round"
-                />
-                <circle cx="12" cy="12" r="9" stroke="currentColor" strokeWidth="1.6" />
-              </svg>
-              Files are encrypted when you upload. Max 5 MB per file.
-            </p>
-
-            <div
-              className={`cc-drop cc-drop--primary${isDragOver ? " is-dragover" : ""}${
-                errors.primary.length > 0 ? " is-error" : ""
-              }`}
-              onDrop={onDrop}
-              onDragOver={onDragOver}
-              onDragEnter={onDragEnter}
-              onDragLeave={onDragLeave}
-            >
-              <div className="cc-drop__content">
-                <span className="cc-drop__icon" aria-hidden="true">
-                  <svg width="40" height="40" viewBox="0 0 24 24" fill="none">
-                    <path
-                      d="M12 15V3m0 0l4 4m-4-4L8 7M4 15v4a2 2 0 002 2h12a2 2 0 002-2v-4"
-                      stroke="currentColor"
-                      strokeWidth="1.6"
-                      strokeLinecap="round"
-                      strokeLinejoin="round"
-                    />
-                  </svg>
-                </span>
-                <strong>Medical Records</strong>
-                <p>
-                  Drag &amp; drop files here · Supported formats: {ACCEPTED_DOC_LABEL} · Max
-                  5 MB per file
-                </p>
-              </div>
-              <input
-                ref={fileInputRef}
-                type="file"
-                name="documents[]"
-                multiple
-                accept={ACCEPTED_DOC_ACCEPT}
-                className="cc-file-input"
-                onChange={(e) => onFilesPicked(e.target.files, "primary")}
+      <div
+        className={`cc-drop cc-drop--primary${isDragOver ? " is-dragover" : ""}${
+          errors.length > 0 ? " is-error" : ""
+        }`}
+        onDrop={onDrop}
+        onDragOver={onDragOver}
+        onDragEnter={onDragEnter}
+        onDragLeave={onDragLeave}
+      >
+        <div className="cc-drop__content">
+          <span className="cc-drop__icon" aria-hidden="true">
+            <svg width="40" height="40" viewBox="0 0 24 24" fill="none">
+              <path
+                d="M12 15V3m0 0l4 4m-4-4L8 7M4 15v4a2 2 0 002 2h12a2 2 0 002-2v-4"
+                stroke="currentColor"
+                strokeWidth="1.6"
+                strokeLinecap="round"
+                strokeLinejoin="round"
               />
+            </svg>
+          </span>
+          <strong>Medical Records, Lab Investigations &amp; other attachments</strong>
+          <p>
+            Drag &amp; drop files here, or select several at once · Supported formats:{" "}
+            {ACCEPTED_DOC_LABEL} · Max 5 MB per file
+          </p>
+          <p className="cc-drop__hint">
+            Label each file as Medical Records, Lab Investigations, or Other attachments in
+            the list below.
+          </p>
+        </div>
+        <input
+          ref={fileInputRef}
+          type="file"
+          name="documents[]"
+          multiple
+          accept={ACCEPTED_DOC_ACCEPT}
+          className="cc-file-input"
+          onChange={(e) => onFilesPicked(e.target.files)}
+        />
+        <button
+          type="button"
+          className="cc-btn cc-btn--outline cc-doc-select-btn"
+          onClick={onFileTrigger}
+        >
+          Select files
+        </button>
+      </div>
+
+      <DocErrorList messages={errors} />
+
+      <p className="cc-file-list__title" id="cc-file-list-label">
+        Selected files ({files.length})
+      </p>
+      <ul className="cc-file-list" aria-labelledby="cc-file-list-label">
+        {files.map((file) => {
+          // The label is only editable while the file is still local — the
+          // Firestore `kind` is written at upload time and can't be changed
+          // afterwards.
+          const editable =
+            file.section !== undefined &&
+            (file.status === "pending" || file.status === "error");
+          return (
+            <li key={file.id}>
+              <span className="cc-file-list__name">{file.name}</span>
+              <span className="cc-file-list__meta">
+                {file.status === "uploading"
+                  ? "Uploading…"
+                  : file.status === "error"
+                    ? file.error || "Upload failed"
+                    : file.status === "pending"
+                      ? `${file.meta} · not saved yet`
+                      : file.meta}
+              </span>
+              {editable ? (
+                <label className="cc-file-list__label">
+                  <span className="visually-hidden">Label for {file.name}</span>
+                  <select
+                    className="cc-select cc-file-list__select"
+                    value={file.section}
+                    onChange={(e) => onSectionChange(file.id, e.target.value as DocSection)}
+                  >
+                    {DOC_SECTIONS.map((section) => (
+                      <option key={section} value={section}>
+                        {SECTION_LABEL[section]}
+                      </option>
+                    ))}
+                  </select>
+                </label>
+              ) : (
+                <span className="cc-file-list__label cc-file-list__kind">
+                  {formatExistingDocLabel(file.kind)}
+                </span>
+              )}
               <button
                 type="button"
-                className="cc-btn cc-btn--outline cc-doc-select-btn"
-                onClick={onFileTrigger}
+                className="cc-file-list__remove"
+                aria-label={`Remove ${file.name}`}
+                onClick={() => onRemoveFile(file.id)}
               >
-                Select files
+                ×
               </button>
-            </div>
-
-            <DocErrorList messages={errors.primary} />
-
-            <div className="cc-doc-secondary">
-              <div className="cc-doc-secondary__col">
-                <button
-                  type="button"
-                  className={`cc-drop cc-drop--compact${
-                    errors.lab.length > 0 ? " is-error" : ""
-                  }`}
-                  onClick={() => labInputRef.current?.click()}
-                >
-                  <span className="cc-drop__mini-icon" aria-hidden="true">
-                    <svg width="22" height="22" viewBox="0 0 24 24" fill="none">
-                      <circle cx="11" cy="11" r="3" stroke="currentColor" strokeWidth="1.6" />
-                      <path
-                        d="M11 8V2M11 22v-6M8 11H2M22 11h-6"
-                        stroke="currentColor"
-                        strokeWidth="1.6"
-                        strokeLinecap="round"
-                      />
-                    </svg>
-                  </span>
-                  <strong>Lab Investigations</strong>
-                  <span className="cc-drop__hint">{ACCEPTED_DOC_LABEL}</span>
-                </button>
-                <input
-                  ref={labInputRef}
-                  type="file"
-                  multiple
-                  accept={ACCEPTED_DOC_ACCEPT}
-                  className="cc-file-input"
-                  onChange={(e) => onFilesPicked(e.target.files, "lab")}
-                />
-                <DocErrorList messages={errors.lab} />
-              </div>
-              <div className="cc-doc-secondary__col">
-                <button
-                  type="button"
-                  className={`cc-drop cc-drop--compact${
-                    errors.other.length > 0 ? " is-error" : ""
-                  }`}
-                  onClick={() => otherInputRef.current?.click()}
-                >
-                  <span className="cc-drop__mini-icon" aria-hidden="true">
-                    <svg width="22" height="22" viewBox="0 0 24 24" fill="none">
-                      <path
-                        d="M21.44 11.05l-9.19 9.19a6 6 0 01-8.49-8.49l9.19-9.19a4 4 0 015.66 5.66L9.64 16.78a2 2 0 01-2.83-2.83l8.49-8.48"
-                        stroke="currentColor"
-                        strokeWidth="1.6"
-                        strokeLinecap="round"
-                        strokeLinejoin="round"
-                      />
-                    </svg>
-                  </span>
-                  <strong>Other attachments</strong>
-                  <span className="cc-drop__hint">Notes, previous consults</span>
-                </button>
-                <input
-                  ref={otherInputRef}
-                  type="file"
-                  multiple
-                  accept={ACCEPTED_DOC_ACCEPT}
-                  className="cc-file-input"
-                  onChange={(e) => onFilesPicked(e.target.files, "other")}
-                />
-                <DocErrorList messages={errors.other} />
-              </div>
-            </div>
-
-            <p className="cc-file-list__title" id="cc-file-list-label">
-              Selected files ({files.length})
-            </p>
-            <ul className="cc-file-list" aria-labelledby="cc-file-list-label">
-              {files.map((file) => (
-                <li key={file.id}>
-                  <span className="cc-file-list__name">{file.name}</span>
-                  <span className="cc-file-list__meta">
-                    {file.status === "uploading"
-                      ? "Uploading…"
-                      : file.status === "error"
-                        ? file.error || "Upload failed"
-                        : file.status === "pending"
-                          ? `${file.meta} · not saved yet`
-                          : file.meta}
-                  </span>
-                  <button
-                    type="button"
-                    className="cc-file-list__remove"
-                    aria-label={`Remove ${file.name}`}
-                    onClick={() => onRemoveFile(file.id)}
-                  >
-                    ×
-                  </button>
-                </li>
-              ))}
-            </ul>
-          </section>
-        </div>
-      </div>
+            </li>
+          );
+        })}
+      </ul>
     </div>
   );
 }

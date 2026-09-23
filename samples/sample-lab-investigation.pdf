@@ -1,0 +1,70 @@
+%PDF-1.4
+1 0 obj
+<< /Type /Catalog /Pages 2 0 R >>
+endobj
+2 0 obj
+<< /Type /Pages /Kids [3 0 R] /Count 1 >>
+endobj
+3 0 obj
+<< /Type /Page /Parent 2 0 R /MediaBox [0 0 595 842] /Resources << /Font << /F1 5 0 R /F2 6 0 R >> >> /Contents 4 0 R >>
+endobj
+4 0 obj
+<< /Length 3350 >>
+stream
+BT /F2 16 Tf 1 0 0 1 56 770 Tm (Riverside Clinical Laboratory - Results Report) Tj ET
+BT /F1 9 Tf 1 0 0 1 56 748 Tm (SAMPLE DOCUMENT - test data only, not a real patient result) Tj ET
+BT /F1 10 Tf 1 0 0 1 56 702 Tm (Patient: Jordan A. Ellis          DOB: 1978-04-12          Sex: Male) Tj ET
+BT /F1 10 Tf 1 0 0 1 56 686 Tm (Accession: LAB-SAMPLE-77310       Collected: 2026-08-05 08:14) Tj ET
+BT /F1 10 Tf 1 0 0 1 56 670 Tm (Ordering provider: Dr. Maria Chen, MD     Reported: 2026-08-06 09:02) Tj ET
+BT /F2 12 Tf 1 0 0 1 56 627 Tm (Complete blood count) Tj ET
+BT /F2 10 Tf 1 0 0 1 56 609 Tm (Test                     Result      Units        Reference     Flag) Tj ET
+BT /F1 10 Tf 1 0 0 1 56 593 Tm (WBC                      6.8         10^3/uL      4.0 - 11.0) Tj ET
+BT /F1 10 Tf 1 0 0 1 56 577 Tm (RBC                      4.31        10^6/uL      4.50 - 5.90    L) Tj ET
+BT /F1 10 Tf 1 0 0 1 56 561 Tm (Hemoglobin               11.9        g/dL         13.5 - 17.5    L) Tj ET
+BT /F1 10 Tf 1 0 0 1 56 545 Tm (Hematocrit               36.2        %            41.0 - 53.0    L) Tj ET
+BT /F1 10 Tf 1 0 0 1 56 529 Tm (MCV                      78.4        fL           80 - 100       L) Tj ET
+BT /F1 10 Tf 1 0 0 1 56 513 Tm (Platelets                322         10^3/uL      150 - 400) Tj ET
+BT /F2 12 Tf 1 0 0 1 56 472 Tm (Comprehensive metabolic panel) Tj ET
+BT /F2 10 Tf 1 0 0 1 56 454 Tm (Test                     Result      Units        Reference     Flag) Tj ET
+BT /F1 10 Tf 1 0 0 1 56 438 Tm (Sodium                   139         mmol/L       135 - 145) Tj ET
+BT /F1 10 Tf 1 0 0 1 56 422 Tm (Potassium                4.1         mmol/L       3.5 - 5.1) Tj ET
+BT /F1 10 Tf 1 0 0 1 56 406 Tm (Creatinine               0.94        mg/dL        0.70 - 1.30) Tj ET
+BT /F1 10 Tf 1 0 0 1 56 390 Tm (eGFR                     92          mL/min       > 60) Tj ET
+BT /F1 10 Tf 1 0 0 1 56 374 Tm (ALT                      44          U/L          10 - 40        H) Tj ET
+BT /F1 10 Tf 1 0 0 1 56 358 Tm (AST                      38          U/L          10 - 40) Tj ET
+BT /F1 10 Tf 1 0 0 1 56 342 Tm (Alkaline phosphatase     96          U/L          40 - 130) Tj ET
+BT /F1 10 Tf 1 0 0 1 56 326 Tm (Total bilirubin          0.7         mg/dL        0.2 - 1.2) Tj ET
+BT /F1 10 Tf 1 0 0 1 56 310 Tm (Albumin                  4.2         g/dL         3.5 - 5.0) Tj ET
+BT /F2 12 Tf 1 0 0 1 56 269 Tm (Iron studies and other) Tj ET
+BT /F1 10 Tf 1 0 0 1 56 251 Tm (Ferritin                 11          ng/mL        30 - 400       L) Tj ET
+BT /F1 10 Tf 1 0 0 1 56 235 Tm (Iron saturation          12          %            20 - 50        L) Tj ET
+BT /F1 10 Tf 1 0 0 1 56 219 Tm (H. pylori stool antigen  POSITIVE                 Negative       A) Tj ET
+BT /F1 10 Tf 1 0 0 1 56 203 Tm (Fecal occult blood       POSITIVE                 Negative       A) Tj ET
+BT /F2 12 Tf 1 0 0 1 56 160 Tm (Interpretation) Tj ET
+BT /F1 11 Tf 1 0 0 1 56 142 Tm (Microcytic anemia with low ferritin, consistent with iron deficiency.) Tj ET
+BT /F1 11 Tf 1 0 0 1 56 125 Tm (Positive H. pylori antigen and positive fecal occult blood. Correlate) Tj ET
+BT /F1 11 Tf 1 0 0 1 56 108 Tm (clinically; endoscopic evaluation suggested.) Tj ET
+BT /F1 9 Tf 1 0 0 1 56 60 Tm (Verified by A. Okafor, MLS\(ASCP\) - Riverside Clinical Laboratory) Tj ET
+0.6 w 0.72 0.75 0.8 RG 56 738 m 539 738 l S
+endstream
+endobj
+5 0 obj
+<< /Type /Font /Subtype /Type1 /BaseFont /Helvetica /Encoding /WinAnsiEncoding >>
+endobj
+6 0 obj
+<< /Type /Font /Subtype /Type1 /BaseFont /Helvetica-Bold /Encoding /WinAnsiEncoding >>
+endobj
+xref
+0 7
+0000000000 65535 f 
+0000000009 00000 n 
+0000000058 00000 n 
+0000000115 00000 n 
+0000000251 00000 n 
+0000003653 00000 n 
+0000003750 00000 n 
+trailer
+<< /Size 7 /Root 1 0 R >>
+startxref
+3852
+%%EOF

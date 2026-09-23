@@ -54,6 +54,8 @@ export async function POST() {
       caseShortCode: initial.shortCode,
       ownerUserId: userId,
     }).catch((err) => console.error("[cases POST] emitCaseCreated failed:", err));
+    // MA staff are deliberately NOT notified here — a fresh case is a private
+    // draft. They're mailed when the PCP shares it (see api/cases/[caseId]/share-ma).
     return NextResponse.json({ ok: true, caseId, ...initial });
   } catch (err) {
     console.error("[cases POST] error:", err);

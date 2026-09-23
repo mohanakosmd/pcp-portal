@@ -19,7 +19,9 @@ export type NotificationType =
   | "report_shared"
   | "report_remark";
 
-export type RecipientType = "pcp" | "gi";
+// "ma" recipients are Medical Assistants from `admin_users` — they have no
+// PCP-portal login, so their docs are written for the admin app to consume.
+export type RecipientType = "pcp" | "gi" | "ma";
 
 export type NotificationDoc = {
   recipientUserId: string;
