@@ -1,4 +1,5 @@
 import { NextResponse } from "next/server";
+import { apiErrorResponse } from "@/lib/api-error";
 
 import { readSessionUserId } from "@/lib/auth";
 import { generateJson } from "@/lib/gemini";
@@ -209,14 +210,6 @@ export async function POST(request: Request) {
     return NextResponse.json({ ok: true, fields, found, fileName: file.name });
   } catch (err) {
     console.error("[hpi-extract] error:", err);
-    return NextResponse.json(
-      {
-        error:
-          err instanceof Error
-            ? `Couldn't read that document — ${err.message}`
-            : "Couldn't read that document.",
-      },
-      { status: 500 }
-    );
+    return apiErrorResponse(err, "Couldn't read that document. Please try again.");
   }
 }

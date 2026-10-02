@@ -3,9 +3,9 @@
 
 const GEMINI_API_ROOT = "https://generativelanguage.googleapis.com/v1beta/models";
 
-// gemini-2.0-flash was retired by Google (returns 404). Default to the current
+// gemini-2.0/2.5-flash were retired by Google (404 for new users). Default to the current
 // fast model; override via GEMINI_MODEL in .env.local.
-const DEFAULT_MODEL = process.env.GEMINI_MODEL?.trim() || "gemini-2.5-flash";
+const DEFAULT_MODEL = process.env.GEMINI_MODEL?.trim() || "gemini-3.8-flash";
 
 function requireKey(): string {
   const key = process.env.GEMINI_API_KEY?.trim();
@@ -21,7 +21,7 @@ export type InlineFile = {
 };
 
 export type GenerateTextOptions = {
-  /** Defaults to gemini-2.5-flash (override via GEMINI_MODEL env). */
+  /** Defaults to gemini-3.8-flash (override via GEMINI_MODEL env). */
   model?: string;
   systemInstruction?: string;
   temperature?: number;
