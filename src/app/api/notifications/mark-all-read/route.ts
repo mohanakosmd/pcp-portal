@@ -1,4 +1,5 @@
 import { NextResponse } from "next/server";
+import { apiErrorResponse } from "@/lib/api-error";
 
 import { readSessionUserId } from "@/lib/auth";
 import { markAllReadFor } from "@/lib/notifications";
@@ -15,9 +16,6 @@ export async function POST() {
     return NextResponse.json({ ok: true, markedRead: count });
   } catch (err) {
     console.error("[notifications mark-all-read] error:", err);
-    return NextResponse.json(
-      { error: err instanceof Error ? err.message : "Failed to mark notifications read." },
-      { status: 500 }
-    );
+    return apiErrorResponse(err, "Failed to mark notifications read.");
   }
 }

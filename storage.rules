@@ -1,24 +1,31 @@
 rules_version = '2';
 
-// Firebase Storage security rules for the PCP Portal.
+// Firebase Storage security rules for project aigicare-hipaa.
 //
-// Deploy via the Firebase Console (Storage → Rules → paste → Publish) or with
-// the Firebase CLI: `firebase deploy --only storage`.
+// Deploy: `firebase deploy --only storage --project aigicare-hipaa`.
+// The first deploy prompts to let Storage rules read Firestore (needed for
+// the ownership lookup below) — accept it.
 //
-// The portal's API routes talk to Storage over the REST API with the public
-// client config (no service-account auth), so for the demo we allow
-// unauthenticated read/write under the `pcp_cases/` prefix only. Everything
-// else stays denied by default.
+// Case objects live at `pcp_cases/{caseId}/...`. Access requires a signed-in
+// Firebase Auth user whose uid equals the case's `ownerUserId` in Firestore.
 //
-// Before production: replace `if true` with real auth checks (e.g. require a
-// signed-in user and match the case's ownerUserId), or move uploads behind a
-// service-account-authenticated server.
+// NOTE: the portal currently uses its own session auth, not Firebase Auth, so
+// `request.auth` is always null and these rules deny every client request.
+// Case documents are stored in Firestore today (src/lib/case-files.ts);
+// nothing uploads here. Objects uploaded earlier stay reachable only through
+// their tokenized download URLs, which bypass rules.
 
 service firebase.storage {
   match /b/{bucket}/o {
-    // Case documents + insurance card images.
-    match /pcp_cases/{allPaths=**} {
-      allow read, write: if true;
+    function isCaseOwner(caseId) {
+      return request.auth != null
+        && firestore.exists(/databases/(default)/documents/pcp_cases/$(caseId))
+        && firestore.get(/databases/(default)/documents/pcp_cases/$(caseId)).data.ownerUserId
+           == request.auth.uid;
+    }
+
+    match /pcp_cases/{caseId}/{allPaths=**} {
+      allow read, write: if isCaseOwner(caseId);
     }
 
     // Deny everything else.

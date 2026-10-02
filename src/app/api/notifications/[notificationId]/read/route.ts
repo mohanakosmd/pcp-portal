@@ -1,4 +1,5 @@
 import { NextResponse } from "next/server";
+import { apiErrorResponse } from "@/lib/api-error";
 
 import { readSessionUserId } from "@/lib/auth";
 import { markRead } from "@/lib/notifications";
@@ -18,12 +19,7 @@ export async function PATCH(
     await markRead(notificationId, userId);
     return NextResponse.json({ ok: true });
   } catch (err) {
-    // eslint-disable-next-line @typescript-eslint/no-explicit-any
-    const status = (err as any)?.status ?? 500;
     console.error("[notifications mark-read] error:", err);
-    return NextResponse.json(
-      { error: err instanceof Error ? err.message : "Failed to mark notification read." },
-      { status }
-    );
+    return apiErrorResponse(err, "Failed to mark notification read.");
   }
 }

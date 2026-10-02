@@ -1,4 +1,10 @@
 {
+  "firestore": {
+    "rules": "firestore.rules"
+  },
+  "storage": {
+    "rules": "storage.rules"
+  },
   "apphosting": {
     "backendId": "pcp-portal",
     "rootDir": ".",

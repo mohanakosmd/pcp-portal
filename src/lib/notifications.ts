@@ -1,6 +1,7 @@
 // In-app notification feed. One Firestore doc per (recipient, event).
 // See migration 004-init-notifications for the schema.
 
+import { ApiError } from "@/lib/api-error";
 import { randomBytes } from "crypto";
 
 import {
@@ -103,16 +104,10 @@ export async function markRead(
   const page = await listDocuments(NOTIFICATIONS_COLLECTION, { pageSize: 200 });
   const target = page.docs.find((d) => d.id === notificationId);
   if (!target) {
-    const err = new Error("Notification not found.");
-    // eslint-disable-next-line @typescript-eslint/no-explicit-any
-    (err as any).status = 404;
-    throw err;
+    throw new ApiError(404, "Notification not found.");
   }
   if (target.data.recipientUserId !== recipientUserId) {
-    const err = new Error("You do not have access to that notification.");
-    // eslint-disable-next-line @typescript-eslint/no-explicit-any
-    (err as any).status = 403;
-    throw err;
+    throw new ApiError(403, "You do not have access to that notification.");
   }
   if (target.data.read === true) return;
   await upsertDocument(NOTIFICATIONS_COLLECTION, notificationId, {

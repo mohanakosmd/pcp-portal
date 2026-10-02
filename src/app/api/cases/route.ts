@@ -1,4 +1,5 @@
 import { NextResponse } from "next/server";
+import { apiErrorResponse } from "@/lib/api-error";
 
 import { readSessionUserId } from "@/lib/auth";
 import {
@@ -59,10 +60,7 @@ export async function POST() {
     return NextResponse.json({ ok: true, caseId, ...initial });
   } catch (err) {
     console.error("[cases POST] error:", err);
-    return NextResponse.json(
-      { error: err instanceof Error ? err.message : "Failed to create case." },
-      { status: 500 }
-    );
+    return apiErrorResponse(err, "Failed to create case.");
   }
 }
 
@@ -104,9 +102,6 @@ export async function GET(request: Request) {
     return NextResponse.json({ ok: true, cases: mine });
   } catch (err) {
     console.error("[cases GET] error:", err);
-    return NextResponse.json(
-      { error: err instanceof Error ? err.message : "Failed to load cases." },
-      { status: 500 }
-    );
+    return apiErrorResponse(err, "Failed to load cases.");
   }
 }

@@ -1,4 +1,5 @@
 import { NextResponse } from "next/server";
+import { apiErrorResponse } from "@/lib/api-error";
 import bcrypt from "bcryptjs";
 
 import {
@@ -132,11 +133,10 @@ export async function POST(request: Request) {
       routedTo: recipient,
       expiresAt: expiresAt.toISOString(),
       emailDelivered: delivery.delivered,
-      emailError: delivery.delivered ? undefined : delivery.reason,
+      emailError: delivery.delivered ? undefined : "We couldn't send the email. Please try again.",
     });
   } catch (err) {
     console.error("[signup] Firestore error:", err);
-    const message = err instanceof Error ? err.message : "Failed to talk to Firestore.";
-    return NextResponse.json({ error: message }, { status: 500 });
+    return apiErrorResponse(err, "Something went wrong. Please try again.");
   }
 }

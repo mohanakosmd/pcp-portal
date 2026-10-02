@@ -25,6 +25,11 @@ const LOGIN_PENDING_MAX_AGE_SECONDS = 60 * 5;
 const RESET_PENDING_MAX_AGE_SECONDS = 60 * 10;
 const RESET_AUTHORIZED_MAX_AGE_SECONDS = 60 * 10;
 
+// `Secure` flag for every auth cookie. Keyed off the app's public URL, not
+// NODE_ENV, and fails secure: only an explicit http:// NEXT_PUBLIC_APP_URL
+// (local dev, see .env.example) drops it. Unset or https → Secure.
+const COOKIE_SECURE = !process.env.NEXT_PUBLIC_APP_URL?.trim().toLowerCase().startsWith("http://");
+
 export function generateOtp(): string {
   return String(randomInt(0, 1_000_000)).padStart(6, "0");
 }
@@ -52,29 +57,44 @@ function sign(payload: string): string {
   return createHmac("sha256", getSecret()).update(payload).digest("base64url");
 }
 
-export function createSessionToken(userId: string): string {
-  const payload = `${userId}.${Date.now()}.${randomBytes(8).toString("hex")}`;
-  return `${payload}.${sign(payload)}`;
+// Which cookie a token was minted for. Signed into the token so one cookie's
+// value can't be replayed as another (e.g. a pre-OTP login-pending token
+// pasted into __session would otherwise skip the OTP step).
+type TokenPurpose = "session" | "login_pending" | "reset_pending" | "reset_authorized";
+
+/**
+ * Token format: `<userId>.<expiresAtMs>.<nonce>.<hmac>`, HMAC over
+ * `<purpose>|<userId>.<expiresAtMs>.<nonce>`. The expiry is enforced on every
+ * read, independent of the cookie's maxAge (which a client can ignore).
+ * Tokens issued before this format carried an issued-at timestamp in the
+ * second field and a purpose-less HMAC, so they all fail verification.
+ */
+function createToken(userId: string, purpose: TokenPurpose, ttlSeconds: number): string {
+  const expiresAt = Date.now() + ttlSeconds * 1000;
+  const payload = `${userId}.${expiresAt}.${randomBytes(8).toString("hex")}`;
+  return `${payload}.${sign(`${purpose}|${payload}`)}`;
 }
 
-export function verifySessionToken(token: string): string | null {
+function verifyToken(token: string, purpose: TokenPurpose): string | null {
   const parts = token.split(".");
   if (parts.length !== 4) return null;
   const payload = parts.slice(0, 3).join(".");
-  const expected = sign(payload);
+  const expected = sign(`${purpose}|${payload}`);
   const got = parts[3];
   if (expected.length !== got.length) return null;
-  const match = timingSafeEqual(Buffer.from(expected), Buffer.from(got));
-  return match ? parts[0] : null;
+  if (!timingSafeEqual(Buffer.from(expected), Buffer.from(got))) return null;
+  const expiresAt = Number(parts[1]);
+  if (!Number.isFinite(expiresAt) || Date.now() >= expiresAt) return null;
+  return parts[0];
 }
 
 export async function setSessionCookie(userId: string): Promise<void> {
-  const token = createSessionToken(userId);
+  const token = createToken(userId, "session", SESSION_MAX_AGE_SECONDS);
   const store = await cookies();
   store.set(SESSION_COOKIE, token, {
     httpOnly: true,
     sameSite: "lax",
-    secure: process.env.NODE_ENV === "production",
+    secure: COOKIE_SECURE,
     path: "/",
     maxAge: SESSION_MAX_AGE_SECONDS,
   });
@@ -84,7 +104,7 @@ export async function readSessionUserId(): Promise<string | null> {
   const store = await cookies();
   const token = store.get(SESSION_COOKIE)?.value;
   if (!token) return null;
-  return verifySessionToken(token);
+  return verifyToken(token, "session");
 }
 
 export async function clearSessionCookie(): Promise<void> {
@@ -93,12 +113,12 @@ export async function clearSessionCookie(): Promise<void> {
 }
 
 export async function setLoginPendingCookie(userId: string): Promise<void> {
-  const token = createSessionToken(userId);
+  const token = createToken(userId, "login_pending", LOGIN_PENDING_MAX_AGE_SECONDS);
   const store = await cookies();
   store.set(LOGIN_PENDING_COOKIE, token, {
     httpOnly: true,
     sameSite: "lax",
-    secure: process.env.NODE_ENV === "production",
+    secure: COOKIE_SECURE,
     path: "/",
     maxAge: LOGIN_PENDING_MAX_AGE_SECONDS,
   });
@@ -108,7 +128,7 @@ export async function readLoginPendingUserId(): Promise<string | null> {
   const store = await cookies();
   const token = store.get(LOGIN_PENDING_COOKIE)?.value;
   if (!token) return null;
-  return verifySessionToken(token);
+  return verifyToken(token, "login_pending");
 }
 
 export async function clearLoginPendingCookie(): Promise<void> {
@@ -117,12 +137,12 @@ export async function clearLoginPendingCookie(): Promise<void> {
 }
 
 export async function setResetPendingCookie(userId: string): Promise<void> {
-  const token = createSessionToken(userId);
+  const token = createToken(userId, "reset_pending", RESET_PENDING_MAX_AGE_SECONDS);
   const store = await cookies();
   store.set(RESET_PENDING_COOKIE, token, {
     httpOnly: true,
     sameSite: "lax",
-    secure: process.env.NODE_ENV === "production",
+    secure: COOKIE_SECURE,
     path: "/",
     maxAge: RESET_PENDING_MAX_AGE_SECONDS,
   });
@@ -132,7 +152,7 @@ export async function readResetPendingUserId(): Promise<string | null> {
   const store = await cookies();
   const token = store.get(RESET_PENDING_COOKIE)?.value;
   if (!token) return null;
-  return verifySessionToken(token);
+  return verifyToken(token, "reset_pending");
 }
 
 export async function clearResetPendingCookie(): Promise<void> {
@@ -141,12 +161,12 @@ export async function clearResetPendingCookie(): Promise<void> {
 }
 
 export async function setResetAuthorizedCookie(userId: string): Promise<void> {
-  const token = createSessionToken(userId);
+  const token = createToken(userId, "reset_authorized", RESET_AUTHORIZED_MAX_AGE_SECONDS);
   const store = await cookies();
   store.set(RESET_AUTHORIZED_COOKIE, token, {
     httpOnly: true,
     sameSite: "lax",
-    secure: process.env.NODE_ENV === "production",
+    secure: COOKIE_SECURE,
     path: "/",
     maxAge: RESET_AUTHORIZED_MAX_AGE_SECONDS,
   });
@@ -156,7 +176,7 @@ export async function readResetAuthorizedUserId(): Promise<string | null> {
   const store = await cookies();
   const token = store.get(RESET_AUTHORIZED_COOKIE)?.value;
   if (!token) return null;
-  return verifySessionToken(token);
+  return verifyToken(token, "reset_authorized");
 }
 
 export async function clearResetAuthorizedCookie(): Promise<void> {

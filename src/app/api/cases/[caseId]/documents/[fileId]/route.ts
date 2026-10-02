@@ -1,4 +1,5 @@
 import { NextResponse } from "next/server";
+import { apiErrorResponse } from "@/lib/api-error";
 
 import { readSessionUserId } from "@/lib/auth";
 import { deleteFileChunks, readFileBase64 } from "@/lib/case-files";
@@ -62,13 +63,8 @@ export async function GET(
       },
     });
   } catch (err) {
-    // eslint-disable-next-line @typescript-eslint/no-explicit-any
-    const status = (err as any)?.status ?? 500;
     console.error("[documents GET one] error:", err);
-    return NextResponse.json(
-      { error: err instanceof Error ? err.message : "Failed to load document." },
-      { status }
-    );
+    return apiErrorResponse(err, "Failed to load document.");
   }
 }
 
@@ -127,12 +123,7 @@ export async function DELETE(
 
     return NextResponse.json({ ok: true });
   } catch (err) {
-    // eslint-disable-next-line @typescript-eslint/no-explicit-any
-    const status = (err as any)?.status ?? 500;
     console.error("[documents DELETE] error:", err);
-    return NextResponse.json(
-      { error: err instanceof Error ? err.message : "Delete failed." },
-      { status }
-    );
+    return apiErrorResponse(err, "Delete failed.");
   }
 }

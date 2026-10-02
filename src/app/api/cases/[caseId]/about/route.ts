@@ -1,4 +1,5 @@
 import { NextResponse } from "next/server";
+import { apiErrorResponse } from "@/lib/api-error";
 
 import { readSessionUserId } from "@/lib/auth";
 import {
@@ -200,12 +201,7 @@ export async function PATCH(
 
     return NextResponse.json({ ok: true, about: next, aboutComplete: completion.complete });
   } catch (err) {
-    // eslint-disable-next-line @typescript-eslint/no-explicit-any
-    const status = (err as any)?.status ?? 500;
     console.error("[cases PATCH about] error:", err);
-    return NextResponse.json(
-      { error: err instanceof Error ? err.message : "Failed to save About." },
-      { status }
-    );
+    return apiErrorResponse(err, "Failed to save About.");
   }
 }

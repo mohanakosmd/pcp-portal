@@ -1,4 +1,5 @@
 import { NextResponse } from "next/server";
+import { apiErrorResponse } from "@/lib/api-error";
 
 import {
   generateOtp,
@@ -73,7 +74,6 @@ export async function POST(request: Request) {
     return NextResponse.json({ ok: true, email });
   } catch (err) {
     console.error("[forgot-password] error:", err);
-    const message = err instanceof Error ? err.message : "Could not send the reset code.";
-    return NextResponse.json({ error: message }, { status: 500 });
+    return apiErrorResponse(err, "Could not send the reset code.");
   }
 }

@@ -1,6 +1,7 @@
 // Types + small helpers for the pcp_cases collection. Matches the contract
 // in docs/create-case-schema.md.
 
+import { ApiError } from "@/lib/api-error";
 import { randomBytes } from "crypto";
 
 import { ageFromDob } from "@/lib/age";
@@ -195,17 +196,11 @@ export async function readCaseOwnedBy(
 ): Promise<CaseRootDoc> {
   const doc = await getDocument(PCP_CASES_COLLECTION, caseId);
   if (!doc) {
-    const err = new Error(`Case ${caseId} not found.`);
-    // eslint-disable-next-line @typescript-eslint/no-explicit-any
-    (err as any).status = 404;
-    throw err;
+    throw new ApiError(404, `Case ${caseId} not found.`);
   }
   const data = doc.data as Partial<CaseRootDoc>;
   if (data.ownerUserId !== userId) {
-    const err = new Error("You do not have access to this case.");
-    // eslint-disable-next-line @typescript-eslint/no-explicit-any
-    (err as any).status = 403;
-    throw err;
+    throw new ApiError(403, "You do not have access to this case.");
   }
   return data as CaseRootDoc;
 }

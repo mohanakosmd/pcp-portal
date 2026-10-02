@@ -1,4 +1,5 @@
 import { NextResponse } from "next/server";
+import { apiErrorResponse } from "@/lib/api-error";
 
 import { readSessionUserId } from "@/lib/auth";
 import { syncGiNotificationsFor } from "@/lib/gi-notification-sync";
@@ -31,9 +32,6 @@ export async function GET(request: Request) {
     return NextResponse.json({ notifications, unreadCount });
   } catch (err) {
     console.error("[notifications GET] error:", err);
-    return NextResponse.json(
-      { error: err instanceof Error ? err.message : "Failed to load notifications." },
-      { status: 500 }
-    );
+    return apiErrorResponse(err, "Failed to load notifications.");
   }
 }

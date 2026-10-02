@@ -1,4 +1,5 @@
 import { NextResponse } from "next/server";
+import { apiErrorResponse } from "@/lib/api-error";
 
 import { PCP_USERS_COLLECTION } from "@/lib/firebase";
 import {
@@ -145,7 +146,6 @@ export async function POST(request: Request) {
     return NextResponse.json({ ok: true, status: "active" });
   } catch (err) {
     console.error("[verify] Firestore error:", err);
-    const message = err instanceof Error ? err.message : "Failed to talk to Firestore.";
-    return NextResponse.json({ error: message }, { status: 500 });
+    return apiErrorResponse(err, "Something went wrong. Please try again.");
   }
 }

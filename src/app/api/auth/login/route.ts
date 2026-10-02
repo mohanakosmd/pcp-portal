@@ -1,4 +1,5 @@
 import { NextResponse } from "next/server";
+import { apiErrorResponse } from "@/lib/api-error";
 import bcrypt from "bcryptjs";
 
 import {
@@ -12,6 +13,12 @@ import { PCP_USERS_COLLECTION } from "@/lib/firebase";
 import { getDocument, nowIso, upsertDocument } from "@/lib/firestore-rest";
 import { sendSignupOtpEmail } from "@/lib/otp-email";
 import { emailKey } from "@/lib/pcp-uniqueness";
+import {
+  clearLoginFailures,
+  clientIp,
+  loginLockedFor,
+  recordLoginFailure,
+} from "@/lib/login-throttle";
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
@@ -45,12 +52,23 @@ export async function POST(request: Request) {
 
   const email = normalizeEmail(rawEmail);
   const userId = emailKey(email);
+  const ip = clientIp(request);
+
+  const retryAfter = await loginLockedFor(email, ip);
+  if (retryAfter !== null) {
+    return NextResponse.json(
+      { error: "Too many failed login attempts. Please try again later." },
+      { status: 429, headers: { "Retry-After": String(retryAfter) } }
+    );
+  }
 
   try {
     const existing = await getDocument(PCP_USERS_COLLECTION, userId);
     if (!existing || existing.data.verified !== true) {
       // No account, or signup never completed. Return generic message so we
-      // don't leak account existence.
+      // don't leak account existence. Counted like a wrong password so the
+      // throttle behaves the same either way.
+      await recordLoginFailure(email, ip);
       return NextResponse.json({ error: GENERIC_INVALID }, { status: 401 });
     }
 
@@ -64,8 +82,10 @@ export async function POST(request: Request) {
 
     const matches = await bcrypt.compare(password, hash);
     if (!matches) {
+      await recordLoginFailure(email, ip);
       return NextResponse.json({ error: GENERIC_INVALID }, { status: 401 });
     }
+    await clearLoginFailures(email);
 
     const code = generateOtp();
     const expiresAt = otpExpiresAt();
@@ -95,11 +115,10 @@ export async function POST(request: Request) {
       routedTo: recipient,
       expiresAt: expiresAt.toISOString(),
       emailDelivered: delivery.delivered,
-      emailError: delivery.delivered ? undefined : delivery.reason,
+      emailError: delivery.delivered ? undefined : "We couldn't send the email. Please try again.",
     });
   } catch (err) {
     console.error("[login] error:", err);
-    const message = err instanceof Error ? err.message : "Login failed.";
-    return NextResponse.json({ error: message }, { status: 500 });
+    return apiErrorResponse(err, "Login failed.");
   }
 }

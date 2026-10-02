@@ -1,4 +1,5 @@
 import { NextResponse } from "next/server";
+import { apiErrorResponse } from "@/lib/api-error";
 
 import { readSessionUserId } from "@/lib/auth";
 import { PCP_CASES_COLLECTION, readCaseOwnedBy } from "@/lib/cases";
@@ -71,12 +72,7 @@ export async function POST(
 
     return NextResponse.json({ ok: true, sharedWithMa: true, sharedWithMaAt: now });
   } catch (err) {
-    // eslint-disable-next-line @typescript-eslint/no-explicit-any
-    const status = (err as any)?.status ?? 500;
     console.error("[cases share-ma] error:", err);
-    return NextResponse.json(
-      { error: err instanceof Error ? err.message : "Failed to share case with MA." },
-      { status }
-    );
+    return apiErrorResponse(err, "Failed to share case with MA.");
   }
 }

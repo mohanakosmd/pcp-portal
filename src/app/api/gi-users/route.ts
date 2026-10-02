@@ -1,4 +1,5 @@
 import { NextResponse } from "next/server";
+import { apiErrorResponse } from "@/lib/api-error";
 
 import { readSessionUserId } from "@/lib/auth";
 import { listGiUsers } from "@/lib/gi-users";
@@ -15,9 +16,6 @@ export async function GET() {
     return NextResponse.json({ giUsers });
   } catch (err) {
     console.error("[gi-users GET] error:", err);
-    return NextResponse.json(
-      { error: err instanceof Error ? err.message : "Failed to load GI users." },
-      { status: 500 }
-    );
+    return apiErrorResponse(err, "Failed to load GI users.");
   }
 }

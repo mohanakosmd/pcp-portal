@@ -1,4 +1,5 @@
 import { NextResponse } from "next/server";
+import { apiErrorResponse } from "@/lib/api-error";
 
 import { readSessionUserId } from "@/lib/auth";
 import { PCP_USERS_COLLECTION } from "@/lib/firebase";
@@ -79,9 +80,6 @@ export async function PATCH(request: Request) {
     return NextResponse.json({ ok: true });
   } catch (err) {
     console.error("[profile PATCH] error:", err);
-    return NextResponse.json(
-      { error: err instanceof Error ? err.message : "Failed to save profile." },
-      { status: 500 }
-    );
+    return apiErrorResponse(err, "Failed to save profile.");
   }
 }

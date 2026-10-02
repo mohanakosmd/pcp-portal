@@ -1,4 +1,5 @@
 import { NextResponse } from "next/server";
+import { apiErrorResponse } from "@/lib/api-error";
 
 import {
   generateOtp,
@@ -60,11 +61,10 @@ export async function POST() {
       routedTo: recipient,
       expiresAt: expiresAt.toISOString(),
       emailDelivered: delivery.delivered,
-      emailError: delivery.delivered ? undefined : delivery.reason,
+      emailError: delivery.delivered ? undefined : "We couldn't send the email. Please try again.",
     });
   } catch (err) {
     console.error("[login/resend] error:", err);
-    const message = err instanceof Error ? err.message : "Resend failed.";
-    return NextResponse.json({ error: message }, { status: 500 });
+    return apiErrorResponse(err, "Resend failed.");
   }
 }

@@ -1,4 +1,5 @@
 import { NextResponse } from "next/server";
+import { apiErrorResponse } from "@/lib/api-error";
 
 import {
   clearLoginPendingCookie,
@@ -86,7 +87,6 @@ export async function POST(request: Request) {
     return NextResponse.json({ ok: true });
   } catch (err) {
     console.error("[login/verify] error:", err);
-    const message = err instanceof Error ? err.message : "Verification failed.";
-    return NextResponse.json({ error: message }, { status: 500 });
+    return apiErrorResponse(err, "Verification failed.");
   }
 }

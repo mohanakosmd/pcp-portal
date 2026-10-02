@@ -1,4 +1,5 @@
 import { NextResponse } from "next/server";
+import { apiErrorResponse } from "@/lib/api-error";
 
 import { readSessionUserId } from "@/lib/auth";
 import {
@@ -196,12 +197,7 @@ export async function PATCH(
 
     return NextResponse.json({ ok: true, health: next, healthComplete: completion.complete });
   } catch (err) {
-    // eslint-disable-next-line @typescript-eslint/no-explicit-any
-    const status = (err as any)?.status ?? 500;
     console.error("[cases PATCH health] error:", err);
-    return NextResponse.json(
-      { error: err instanceof Error ? err.message : "Failed to save Health." },
-      { status }
-    );
+    return apiErrorResponse(err, "Failed to save Health.");
   }
 }

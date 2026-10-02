@@ -1,4 +1,5 @@
 import { NextResponse } from "next/server";
+import { apiErrorResponse } from "@/lib/api-error";
 
 import { readSessionUserId } from "@/lib/auth";
 import { PCP_USERS_COLLECTION } from "@/lib/firebase";
@@ -26,13 +27,8 @@ export async function GET(
     const comments = await listReportComments(reportId);
     return NextResponse.json({ comments });
   } catch (err) {
-    // eslint-disable-next-line @typescript-eslint/no-explicit-any
-    const status = (err as any)?.status ?? 500;
     console.error("[report comments GET] error:", err);
-    return NextResponse.json(
-      { error: err instanceof Error ? err.message : "Failed to load comments." },
-      { status }
-    );
+    return apiErrorResponse(err, "Failed to load comments.");
   }
 }
 
@@ -82,12 +78,7 @@ export async function POST(
 
     return NextResponse.json({ ok: true, comment });
   } catch (err) {
-    // eslint-disable-next-line @typescript-eslint/no-explicit-any
-    const status = (err as any)?.status ?? 500;
     console.error("[report comments POST] error:", err);
-    return NextResponse.json(
-      { error: err instanceof Error ? err.message : "Failed to post comment." },
-      { status }
-    );
+    return apiErrorResponse(err, "Failed to post comment.");
   }
 }

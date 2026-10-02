@@ -1,4 +1,5 @@
 import { NextResponse } from "next/server";
+import { apiErrorResponse } from "@/lib/api-error";
 
 import {
   RECOMMENDED_PROCEDURE_CATALOG,
@@ -585,12 +586,7 @@ export async function POST(
       aiSuggestions: suggestions,
     });
   } catch (err) {
-    // eslint-disable-next-line @typescript-eslint/no-explicit-any
-    const status = (err as any)?.status ?? 500;
     console.error("[ai-summary] error:", err);
-    return NextResponse.json(
-      { error: err instanceof Error ? err.message : "AI summary failed." },
-      { status }
-    );
+    return apiErrorResponse(err, "AI summary failed.");
   }
 }

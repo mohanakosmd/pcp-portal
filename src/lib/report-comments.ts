@@ -2,6 +2,7 @@
 // report so they stay tightly associated and the GI portal can read them per
 // report: gi_shared_reports/{reportId}/comments/{commentId}
 
+import { ApiError } from "@/lib/api-error";
 import { randomBytes } from "crypto";
 
 import { PCP_CASES_COLLECTION } from "@/lib/cases";
@@ -66,24 +67,15 @@ export async function assertReportAccessibleBy(
 ): Promise<ReportAccess> {
   const report = await getDocument(GI_SHARED_REPORTS_COLLECTION, reportId);
   if (!report) {
-    const err = new Error("Report not found.");
-    // eslint-disable-next-line @typescript-eslint/no-explicit-any
-    (err as any).status = 404;
-    throw err;
+    throw new ApiError(404, "Report not found.");
   }
   const caseId = typeof report.data.case_id === "string" ? report.data.case_id : "";
   if (!caseId) {
-    const err = new Error("Report is not linked to a case.");
-    // eslint-disable-next-line @typescript-eslint/no-explicit-any
-    (err as any).status = 409;
-    throw err;
+    throw new ApiError(409, "Report is not linked to a case.");
   }
   const caseDoc = await getDocument(PCP_CASES_COLLECTION, caseId);
   if (!caseDoc || caseDoc.data.ownerUserId !== userId) {
-    const err = new Error("You do not have access to this report.");
-    // eslint-disable-next-line @typescript-eslint/no-explicit-any
-    (err as any).status = 403;
-    throw err;
+    throw new ApiError(403, "You do not have access to this report.");
   }
   const caseShortCode =
     typeof caseDoc.data.shortCode === "string" ? caseDoc.data.shortCode : caseId;
@@ -124,10 +116,7 @@ export async function addReportComment(input: {
 }): Promise<ReportComment> {
   const body = input.body.trim().slice(0, MAX_BODY);
   if (!body) {
-    const err = new Error("Comment cannot be empty.");
-    // eslint-disable-next-line @typescript-eslint/no-explicit-any
-    (err as any).status = 400;
-    throw err;
+    throw new ApiError(400, "Comment cannot be empty.");
   }
   const id = generateId();
   const createdAt = nowIso();

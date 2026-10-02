@@ -1,4 +1,5 @@
 import { NextResponse } from "next/server";
+import { apiErrorResponse } from "@/lib/api-error";
 
 import { readSessionUserId } from "@/lib/auth";
 import { writeFileChunks } from "@/lib/case-files";
@@ -54,13 +55,8 @@ export async function GET(
       }));
     return NextResponse.json({ ok: true, documents: docs });
   } catch (err) {
-    // eslint-disable-next-line @typescript-eslint/no-explicit-any
-    const status = (err as any)?.status ?? 500;
     console.error("[documents GET] error:", err);
-    return NextResponse.json(
-      { error: err instanceof Error ? err.message : "Failed to load documents." },
-      { status }
-    );
+    return apiErrorResponse(err, "Failed to load documents.");
   }
 }
 
@@ -164,12 +160,7 @@ export async function POST(
       uploadedAt: now,
     });
   } catch (err) {
-    // eslint-disable-next-line @typescript-eslint/no-explicit-any
-    const status = (err as any)?.status ?? 500;
     console.error("[documents POST] error:", err);
-    return NextResponse.json(
-      { error: err instanceof Error ? err.message : "Upload failed." },
-      { status }
-    );
+    return apiErrorResponse(err, "Upload failed.");
   }
 }

@@ -64,6 +64,9 @@ export async function sendSignupOtpEmail(
   return { delivered: false, reason: result.error };
 }
 
+// The code itself is printed only when SendGrid isn't configured (local dev,
+// where the console is the only way to see it). With email delivery on, server
+// logs must never hold live OTPs.
 function logOtp({ recipient, intendedFor, code, fullName }: OtpEmailPayload): void {
   const banner = "=".repeat(60);
   console.log(
@@ -72,7 +75,7 @@ function logOtp({ recipient, intendedFor, code, fullName }: OtpEmailPayload): vo
       "[PCP Portal] Signup OTP generated",
       `  For:        ${fullName} <${intendedFor}>`,
       `  Routed to:  ${recipient}`,
-      `  Code:       ${code}`,
+      `  Code:       ${isSendGridConfigured() ? "(redacted — sent by email)" : code}`,
       banner,
     ].join("\n")
   );

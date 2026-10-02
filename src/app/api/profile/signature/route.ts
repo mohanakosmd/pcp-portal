@@ -1,4 +1,5 @@
 import { NextResponse } from "next/server";
+import { apiErrorResponse } from "@/lib/api-error";
 
 import { readSessionUserId } from "@/lib/auth";
 import { CHUNK_CHARS } from "@/lib/case-files";
@@ -148,10 +149,7 @@ export async function POST(request: Request) {
     return NextResponse.json({ ok: true, version: now });
   } catch (err) {
     console.error("[profile signature POST] error:", err);
-    return NextResponse.json(
-      { error: err instanceof Error ? err.message : "Signature upload failed." },
-      { status: 500 }
-    );
+    return apiErrorResponse(err, "Signature upload failed.");
   }
 }
 
@@ -179,9 +177,6 @@ export async function DELETE() {
     return NextResponse.json({ ok: true });
   } catch (err) {
     console.error("[profile signature DELETE] error:", err);
-    return NextResponse.json(
-      { error: err instanceof Error ? err.message : "Failed to remove signature." },
-      { status: 500 }
-    );
+    return apiErrorResponse(err, "Failed to remove signature.");
   }
 }

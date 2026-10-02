@@ -5,17 +5,25 @@
 // API routes. The REST API ("https://firestore.googleapis.com/v1/...")
 // is plain HTTPS and works reliably from server-side route handlers.
 //
-// All access is bound to the public Firebase API key + Firestore security
-// rules — the same as the JS SDK. Make sure rules allow read/write to
-// `pcp_users` for unauthenticated requests in dev.
+// Auth: every request carries an OAuth access token for a Google service
+// account (Application Default Credentials). On App Hosting that's the
+// backend's runtime service account, fetched from the metadata server; locally
+// run `gcloud auth application-default login` or set
+// GOOGLE_APPLICATION_CREDENTIALS. Service-account requests bypass Firestore
+// security rules, which deny ALL client access (see firestore.rules) — so
+// authorization (e.g. case ownerUserId checks) lives in the API routes.
+
+import { GoogleAuth } from "google-auth-library";
 
 const PROJECT_ID = process.env.NEXT_PUBLIC_FIREBASE_PROJECT_ID;
-const API_KEY = process.env.NEXT_PUBLIC_FIREBASE_API_KEY;
 
-function requireConfig(): { projectId: string; apiKey: string } {
+const googleAuth = new GoogleAuth({
+  scopes: ["https://www.googleapis.com/auth/datastore"],
+});
+
+function requireConfig(): { projectId: string } {
   if (!PROJECT_ID) throw new Error("NEXT_PUBLIC_FIREBASE_PROJECT_ID is not set.");
-  if (!API_KEY) throw new Error("NEXT_PUBLIC_FIREBASE_API_KEY is not set.");
-  return { projectId: PROJECT_ID, apiKey: API_KEY };
+  return { projectId: PROJECT_ID };
 }
 
 function baseUrl(): string {
@@ -23,9 +31,11 @@ function baseUrl(): string {
   return `https://firestore.googleapis.com/v1/projects/${projectId}/databases/(default)/documents`;
 }
 
-function withKey(url: string): string {
-  const { apiKey } = requireConfig();
-  return `${url}${url.includes("?") ? "&" : "?"}key=${apiKey}`;
+/** Bearer header for the ambient service account (token cached/refreshed by google-auth-library). */
+async function authHeader(): Promise<Record<string, string>> {
+  const token = await googleAuth.getAccessToken();
+  if (!token) throw new Error("Could not obtain a Google access token for Firestore.");
+  return { Authorization: `Bearer ${token}` };
 }
 
 // --- Value encoding (JS <-> Firestore "Value" objects) -----------------
@@ -119,7 +129,8 @@ async function fetchJson(
   const controller = new AbortController();
   const timer = setTimeout(() => controller.abort(), timeoutMs);
   try {
-    const response = await fetch(url, { ...init, signal: controller.signal });
+    const headers = { ...(init.headers as Record<string, string>), ...(await authHeader()) };
+    const response = await fetch(url, { ...init, headers, signal: controller.signal });
     let body: unknown = null;
     const text = await response.text();
     if (text) {
@@ -182,7 +193,7 @@ export async function getDocument(
   collection: string,
   id: string
 ): Promise<StoredDoc | null> {
-  const url = withKey(`${baseUrl()}/${encodePath(collection)}/${encodeURIComponent(id)}`);
+  const url = `${baseUrl()}/${encodePath(collection)}/${encodeURIComponent(id)}`;
   const { status, body } = await fetchJson(
     url,
     { method: "GET" },
@@ -213,9 +224,8 @@ export async function upsertDocument(
   const params = new URLSearchParams();
   for (const fp of fieldPaths) params.append("updateMask.fieldPaths", fp);
   // currentDocument.exists not set → upsert (create or update).
-  const url = withKey(
-    `${baseUrl()}/${encodePath(collection)}/${encodeURIComponent(id)}?${params.toString()}`
-  );
+  const url =
+    `${baseUrl()}/${encodePath(collection)}/${encodeURIComponent(id)}?${params.toString()}`;
   const payload = { fields: encodeFields(data) };
   const { status, body } = await fetchJson(
     url,
@@ -250,9 +260,8 @@ export async function createDocument(
   const params = new URLSearchParams();
   for (const fp of fieldPaths) params.append("updateMask.fieldPaths", fp);
   params.append("currentDocument.exists", "false");
-  const url = withKey(
-    `${baseUrl()}/${encodePath(collection)}/${encodeURIComponent(id)}?${params.toString()}`
-  );
+  const url =
+    `${baseUrl()}/${encodePath(collection)}/${encodeURIComponent(id)}?${params.toString()}`;
   const payload = { fields: encodeFields(data) };
   const { status, body } = await fetchJson(
     url,
@@ -288,7 +297,7 @@ export async function addDocument(
   collection: string,
   data: Record<string, unknown>
 ): Promise<StoredDoc> {
-  const url = withKey(`${baseUrl()}/${encodePath(collection)}`);
+  const url = `${baseUrl()}/${encodePath(collection)}`;
   const payload = { fields: encodeFields(data) };
   const { status, body } = await fetchJson(
     url,
@@ -344,7 +353,7 @@ export async function queryDocuments(
   if (opts.limit) structuredQuery.limit = opts.limit;
 
   const { status, body } = await fetchJson(
-    withKey(`${baseUrl()}:runQuery`),
+    `${baseUrl()}:runQuery`,
     {
       method: "POST",
       headers: { "Content-Type": "application/json" },
@@ -381,7 +390,7 @@ export async function listDocuments(
   url.searchParams.set("pageSize", String(opts.pageSize ?? 50));
   if (opts.pageToken) url.searchParams.set("pageToken", opts.pageToken);
   const { status, body } = await fetchJson(
-    withKey(url.toString()),
+    url.toString(),
     { method: "GET" },
     `Firestore LIST ${collection}`
   );
@@ -398,7 +407,7 @@ export async function listDocuments(
 
 /** Delete a single document. Idempotent: deleting a missing doc returns null. */
 export async function deleteDocument(collection: string, id: string): Promise<void> {
-  const url = withKey(`${baseUrl()}/${encodePath(collection)}/${encodeURIComponent(id)}`);
+  const url = `${baseUrl()}/${encodePath(collection)}/${encodeURIComponent(id)}`;
   const { status, body } = await fetchJson(
     url,
     { method: "DELETE" },
@@ -443,7 +452,7 @@ export async function commitWrites(
     ),
   };
   const { status, body: resp } = await fetchJson(
-    withKey(`${baseUrl()}:commit`),
+    `${baseUrl()}:commit`,
     {
       method: "POST",
       headers: { "Content-Type": "application/json" },
@@ -467,7 +476,7 @@ export async function batchGetDocuments(
   if (paths.length === 0) return result;
 
   const { status, body } = await fetchJson(
-    withKey(`${baseUrl()}:batchGet`),
+    `${baseUrl()}:batchGet`,
     {
       method: "POST",
       headers: { "Content-Type": "application/json" },

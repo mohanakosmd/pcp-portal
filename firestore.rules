@@ -1,0 +1,27 @@
+rules_version = '2';
+
+// Firestore security rules for project aigicare-hipaa.
+//
+// Deploy: `firebase deploy --only firestore:rules --project aigicare-hipaa`.
+// NOTE: rules are project-wide — they also govern the GI portal, which shares
+// this database.
+//
+// No client (browser, mobile, or anyone holding the public API key) may read
+// or write anything. The PCP portal's API routes reach Firestore with a
+// service-account token (src/lib/firestore-rest.ts), which bypasses these
+// rules; authorization such as case `ownerUserId` checks is enforced there.
+//
+// Why not `request.auth.uid == resource.data.ownerUserId`? The portal does not
+// use Firebase Auth (custom bcrypt + session cookie), so client requests never
+// carry `request.auth` and an owner rule could only ever deny — or, if Firebase
+// Auth sign-up is enabled, admit accounts nobody vetted. Deny-all is strictly
+// tighter. Add narrow allow rules here only if a client genuinely needs direct
+// access and signs in with Firebase Auth.
+
+service cloud.firestore {
+  match /databases/{database}/documents {
+    match /{document=**} {
+      allow read, write: if false;
+    }
+  }
+}
